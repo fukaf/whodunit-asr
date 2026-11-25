@@ -1,5 +1,7 @@
 # Speaker Diarized Transcription System (SDTS)
 
+> Language: **English** | [日本語](README.ja.md)
+
 Audio in, speaker-attributed transcript out:
 
 ```
