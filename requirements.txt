@@ -1,0 +1,41 @@
+# Core runtime. Pinned to the versions verified against the code in this repo.
+#
+# Python 3.11 or 3.12 is required: whisperx caps at <3.14 and pyannote.audio 4.x
+# requires >=3.11. Do NOT use 3.13 - torch 2.8 wheels exist but the
+# ctranslate2 / torchcodec matrix is not reliable there yet.
+#
+# --- GPU install (do this FIRST, before the line below) --------------------
+# Plain `pip install torch` from PyPI gives a **CPU-only** wheel on Windows.
+# For NVIDIA GPUs install torch from the CUDA index instead:
+#
+#   pip install --index-url https://download.pytorch.org/whl/cu128 \
+#       torch==2.8.0+cu128 torchaudio==2.8.0+cu128
+#
+# cu128 is required for Blackwell (RTX 50xx / B100 / B200, sm_100/120).
+# Older cu121 wheels install cleanly and then report no CUDA devices.
+# Verify with:  python -c "import torch; print(torch.cuda.is_available())"
+# If pip overwrites it on a later install, re-run the command above.
+# ---------------------------------------------------------------------------
+pyannote.audio>=4.1.1,<5
+whisperx>=3.8.6,<4          # BSD-2-Clause; used ONLY for the CTC aligner
+faster-whisper>=1.2.1,<2    # MIT; the ASR engine
+ctranslate2>=4.5.0
+torch~=2.8.0                # see GPU note above; PyPI default is CPU-only
+torchaudio~=2.8.0
+torchcodec>=0.6.0,<0.8.0    # pyannote 4.x audio decoding; needs system ffmpeg
+numpy>=2.1.0
+pyyaml>=6.0
+
+# Optional: only needed when align.enabled=true (word-level timestamps).
+# whisperx calls nltk.sent_tokenize for EVERY language, including Japanese
+# (it falls back to the English Punkt model). Install the data with:
+#   python -m nltk.downloader punkt_tab
+# nltk>=3.8
+#
+# Optional: the "simple + permissive" alternative ASR path.
+# `pip install sdts[sensevoice]` - pulls FunASR + ModelScope.
+# funasr>=1.2.0
+# modelscope>=1.20.0
+
+# Dev
+pytest>=8.0

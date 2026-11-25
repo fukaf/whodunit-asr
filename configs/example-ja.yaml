@@ -1,0 +1,60 @@
+# Example config: Japanese business meeting, 4 known participants.
+# Copy to config.yaml and edit. Every key maps 1:1 onto sdts/config.py.
+#
+# CLI flags override whatever is set here, so this file is the "defaults per
+# deployment" layer, not a lock-in.
+
+audio:
+  sample_rate: 16000          # do not change; both Whisper and pyannote require 16k
+  chunk_seconds: 1800.0       # 30 min - keeps GPU memory flat on 4h+ recordings
+  chunk_overlap_seconds: 15.0 # must exceed the longest single utterance
+
+asr:
+  engine: faster-whisper
+  model: large-v3-turbo       # turbo: ~5x faster than large-v3, ~1-2% worse J WER
+  device: cuda
+  compute_type: float16       # cpu deployments: change to int8
+  language: ja                # skip auto-detect: it costs a pass and 2% accuracy
+  beam_size: 5
+  vad_filter: true
+  # Names, jargon and honorifics that Whisper would otherwise invent spellings
+  # for. Keep it short - a long prompt slows decoding and biases output.
+  initial_prompt: "以下は会議の文字起こしです。"
+  # Keep prior text as context. Off => Japanese punctuation collapses to ~4%
+  # of sentences (measured on this file). On => 99%, no loops observed.
+  condition_on_previous_text: true
+  no_repeat_ngram_size: 0             # set to e.g. 8 if you ever see loops
+
+diarization:
+  pipeline: pyannote/speaker-diarization-community-1
+  device: cuda
+  num_speakers: 4             # set it when you know it; huge accuracy win
+  min_speakers: null
+  max_speakers: null
+  mode: exclusive             # reassign overlap to one speaker (transcript-friendly)
+  # Fill gaps shorter than this inside one speaker's turn. pyannote splits on
+  # every pause: without this, a 28 min hearing returns 422 fragments (82% of
+  # them the same speaker split twice). 1.0 s -> 101 turns, all speakers kept.
+  # null = pyannote default.
+  min_duration_off: 1.0
+
+align:
+  # Off: sentence-level output does not need word timestamps. Turn this on
+  # together with merge.granularity: word if you ever want per-word timing.
+  enabled: false
+  model: null                 # null -> jonatasgrosman/wav2vec2-large-xlsr-53-japanese
+  interpolate_method: nearest
+
+merge:
+  granularity: segment        # one line per sentence, original punctuation kept
+  snap_tolerance: 0.5         # reassign words in diarization gaps to nearest turn
+  merge_gap: 1.2              # pauses shorter than this stay one utterance
+  min_utterance: 0.4          # fragments below this get absorbed
+  min_part_share: 0.25        # split a sentence only if a 2nd speaker holds 25%+
+
+output:
+  out_dir: out
+  formats: [json, txt, srt, md]
+  timestamp_format: hms       # hms -> 00:01:05.250 | seconds -> 65.25
+
+hf_token: null  # set HF_TOKEN env var or run hf auth login; never commit a real token

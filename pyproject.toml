@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sdts"
+version = "0.1.0"
+description = "Speaker-diarized speech transcription with Whisper + pyannote"
+requires-python = ">=3.11,<3.14"
+license = { text = "MIT" }
+dependencies = [
+    "pyannote.audio>=4.1.1,<5",
+    "whisperx>=3.8.6,<4",
+    "faster-whisper>=1.2.1,<2",
+    "torch~=2.8.0",
+    "torchaudio~=2.8.0",
+    "torchcodec>=0.6.0,<0.8.0",
+    "numpy>=2.1.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+sensevoice = ["funasr>=1.2.0", "modelscope>=1.20.0"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+sdts = "sdts.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["sdts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
