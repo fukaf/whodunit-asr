@@ -105,6 +105,34 @@ class OutputConfig:
 
 
 @dataclass
+class AdaptationConfig:
+    """Controlled growth of the persistent voice gallery."""
+
+    enabled: bool = False
+    mode: str = "review"                # review | auto
+    update_margin: float = 0.05         # T_update = accept_threshold + this
+    min_turns: int = 3
+    min_seconds: float = 30.0
+    drift_window: int = 5
+    drift_threshold: float = 0.60
+
+
+@dataclass
+class IdentificationConfig:
+    """Closed-set identification against a local speaker registry."""
+
+    enabled: bool = False
+    registry_path: str = "~/.sdts/registry.db"
+    mode: str = "review"                # off | review | auto
+    unknown_label: str | None = None    # None -> keep SPEAKER_0i
+    accept_threshold: float = 0.70      # uncalibrated placeholder
+    reject_threshold: float = 0.55      # uncalibrated placeholder
+    margin: float = 0.10                # only when >=2 registered candidates
+    max_centroids: int = 6
+    adaptation: AdaptationConfig = field(default_factory=AdaptationConfig)
+
+
+@dataclass
 class PipelineConfig:
     audio: AudioConfig = field(default_factory=AudioConfig)
     asr: AsrConfig = field(default_factory=AsrConfig)
@@ -112,6 +140,7 @@ class PipelineConfig:
     align: AlignConfig = field(default_factory=AlignConfig)
     merge: MergeConfig = field(default_factory=MergeConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    identification: IdentificationConfig = field(default_factory=IdentificationConfig)
     hf_token: str | None = None
     work_dir: str | None = None
 
@@ -128,6 +157,7 @@ class PipelineConfig:
             "align": AlignConfig,
             "merge": MergeConfig,
             "output": OutputConfig,
+            "identification": IdentificationConfig,
         }
         kwargs: dict[str, Any] = {}
         for name, klass in sections.items():
@@ -138,6 +168,8 @@ class PipelineConfig:
                 raise ValueError(f"unknown keys in config.{name}: {sorted(unknown)}")
             if name == "output" and "formats" in raw:
                 raw = {**raw, "formats": tuple(raw["formats"])}
+            if name == "identification" and "adaptation" in raw:
+                raw = {**raw, "adaptation": AdaptationConfig(**(raw["adaptation"] or {}))}
             kwargs[name] = klass(**raw)
         for scalar in ("hf_token", "work_dir"):
             if scalar in data:

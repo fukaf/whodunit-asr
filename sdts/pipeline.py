@@ -31,6 +31,7 @@ from .config import PipelineConfig
 from .diarize import Diarizer
 from .embedding import SpeakerEmbedder
 from .fuse import _join, fuse
+from .identify import identify_speakers
 from .types import Segment, TranscriptResult, Turn, Utterance, Word
 
 log = logging.getLogger(__name__)
@@ -143,6 +144,11 @@ class Pipeline:
                 "rtf": round((time.perf_counter() - t0) / max(info.duration, 1e-6), 4),
             },
         )
+        if self.cfg.identification.enabled:
+            result.meta["identification"] = identify_speakers(
+                result, turns=turns, embedder=self.embedder,
+                cfg=self.cfg.identification, chunk_audio=chunk_audio,
+                chunks=chunks, stride=stride)
         return result
 
     # -- cross-chunk speaker reconciliation --------------------------------
