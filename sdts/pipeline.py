@@ -29,6 +29,7 @@ from .align import Aligner
 from .asr import build_engine
 from .config import PipelineConfig
 from .diarize import Diarizer
+from .embedding import SpeakerEmbedder
 from .fuse import _join, fuse
 from .types import Segment, TranscriptResult, Turn, Utterance, Word
 
@@ -43,6 +44,7 @@ class Pipeline:
         self._engine = None
         self._diarizer = None
         self._aligner = None
+        self._embedder = None
 
     # -- model handles -----------------------------------------------------
     @property
@@ -62,6 +64,13 @@ class Pipeline:
         if self._aligner is None:
             self._aligner = Aligner(self.cfg.align, self.cfg.asr.device)
         return self._aligner
+
+    @property
+    def embedder(self):
+        if self._embedder is None:
+            self._embedder = SpeakerEmbedder(
+                self.cfg.diarization.device, self.cfg.resolve_hf_token())
+        return self._embedder
 
     # -- main entry --------------------------------------------------------
     def run(self, path: str | Path, num_speakers: int | None = None) -> TranscriptResult:
@@ -198,48 +207,7 @@ class Pipeline:
     def _cluster_embedding(self, lab_turns: list[Turn], chunk_audio: list[np.ndarray],
                            chunks: list[tuple[float, float]], stride: float) -> np.ndarray | None:
         """Mean embedding of up to N longest turns belonging to one local cluster."""
-        from pyannote.audio import Inference, Model
-        import torch
-
-        if not hasattr(self, "_embedding_model"):
-            try:
-                model = Model.from_pretrained("pyannote/wespeaker-voxceleb-resnet34-LM",
-                                              token=self.cfg.resolve_hf_token())
-                device = torch.device(self.cfg.diarization.device)
-                if device.type == "cuda" and not torch.cuda.is_available():
-                    device = torch.device("cpu")
-                self._embedding_model = Inference(model, window="whole", device=device)
-            except Exception as exc:                    # noqa: BLE001
-                log.warning("speaker embedding model unavailable (%s); "
-                            "cross-chunk labels will NOT be reconciled", exc)
-                self._embedding_model = None
-        if self._embedding_model is None:
-            return None
-
-        vecs = []
-        for t in sorted(lab_turns, key=lambda x: -x.duration)[:5]:
-            if t.duration < 0.3:
-                continue
-            idx = _chunk_of(t.start, chunks, stride)
-            if idx is None:
-                continue
-            c_start, _ = chunks[idx]
-            arr = chunk_audio[idx]
-            a = max(0, int((t.start - c_start) * self.cfg.audio.sample_rate))
-            b = min(len(arr), int((t.end - c_start) * self.cfg.audio.sample_rate))
-            if b - a < int(0.3 * self.cfg.audio.sample_rate):
-                continue
-            try:
-                emb = self._embedding_model({"waveform": torch.from_numpy(arr[a:b]).unsqueeze(0),
-                                             "sample_rate": self.cfg.audio.sample_rate})
-                vecs.append(np.asarray(emb, dtype=np.float32).reshape(-1))
-            except Exception as exc:                    # noqa: BLE001
-                log.debug("embedding failed for %s: %s", t.speaker, exc)
-        if not vecs:
-            return None
-        v = np.mean(vecs, axis=0)
-        n = np.linalg.norm(v)
-        return v / n if n else None
+        return self.embedder.embed_turns(lab_turns, chunk_audio, chunks, stride)
 
     def _cluster_embeddings(self, embeddings: dict[str, np.ndarray],
                             present: list[str],
