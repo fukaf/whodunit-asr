@@ -361,7 +361,59 @@ CPU のみで int8 を使うと RTF は 0.6〜0.8、つまりおおよそリア�
 
 ---
 
-## 11. 拡張する
+## 11. 話者身份登録（任意機能）
+
+デフォルトはオフです。有効にすると、ローカルの声紋レジストリを使って
+`SPEAKER_0i` を実際の表示名に変換できます。
+
+手順：
+
+```bash
+# 1. 通常どおり文字起こし
+python -m sdts meeting.mp4 --config config.yaml
+
+# 2. ラベル雛形・短い音声クリップ・ローカル確認ページを生成
+python -m sdts labels init out/meeting_ab12cd.json
+#   -> out/meeting_ab12cd.labels.json
+#   -> out/meeting_ab12cd.review.html
+#   -> out/meeting_ab12cd_clips/
+
+# 3. review.html を開いて試聴し、氏名を入力。永続化したい声にチェックを入れて
+#    labels JSON をエクスポート
+
+# 4. ラベルを適用し、全形式を再出力して選択した声を登録
+python -m sdts labels apply out/meeting_ab12cd.json \
+    --labels out/meeting_ab12cd.labels.json
+```
+
+以降は `identification.enabled: true` の新しい音声で登録済みの声が自動照合され、
+`speaker_display` に反映されます。未登録のクラスタは `SPEAKER_0i` のままです。
+`mode: review`（既定）は候補を JSON の meta に記録するだけ、`mode: auto` は
+`accept_threshold` 以上の一致を書き込みます。2つの閾値と margin で曖昧な一致を
+除外し、すべてローカルに監査記録が残ります。
+
+```yaml
+identification:
+  enabled: false
+  registry_path: "~/.sdts/registry.db"
+  mode: review
+  accept_threshold: 0.70   # 暫定値。auto の前に較正してください
+  reject_threshold: 0.55
+  margin: 0.10
+  adaptation:
+    enabled: false
+    mode: review
+```
+
+レジストリ操作：`python -m sdts registry list|show|rename|delete|
+adapt-queue|adapt-approve`、および `enroll` / `calibrate` コマンド。
+レジストリは単一ユーザーの信頼できるローカル環境向けの平文 SQLite で、
+暗号化や複数ユーザー対応は行いません。設計の詳細は
+`docs/speaker-identity-plan.md` を参照してください。
+
+---
+
+## 12. 拡張する
 
 **ASR エンジンを追加する** — プロトコルをサブクラス化して登録します。
 
