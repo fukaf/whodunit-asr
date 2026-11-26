@@ -99,7 +99,153 @@ def apply_overrides(cfg: PipelineConfig, args: argparse.Namespace) -> PipelineCo
     return cfg
 
 
+def build_subcommand_parser() -> argparse.ArgumentParser:
+    top = argparse.ArgumentParser(prog="sdts", description="Speaker-diarized speech transcription")
+    sub = top.add_subparsers(dest="cmd", required=True)
+
+    labels = sub.add_parser("labels", help="post-hoc speaker labelling")
+    lsub = labels.add_subparsers(dest="labels_cmd", required=True)
+    p = lsub.add_parser("init", help="generate labels JSON, clips and review.html")
+    p.add_argument("result")
+    p.add_argument("--clips", type=int, default=5)
+    p.add_argument("--clip-seconds", type=float, default=8.0)
+    p.add_argument("--registry")
+    p = lsub.add_parser("apply", help="apply labels and re-render outputs")
+    p.add_argument("result")
+    p.add_argument("--labels", required=True)
+    p.add_argument("--registry")
+    p.add_argument("--config")
+    p = lsub.add_parser("set", help="set one session alias")
+    p.add_argument("result")
+    p.add_argument("--speaker", required=True)
+    p.add_argument("--name", required=True)
+
+    reg = sub.add_parser("registry", help="manage the local voice registry")
+    rsub = reg.add_subparsers(dest="registry_cmd", required=True)
+    p = rsub.add_parser("list")
+    p.add_argument("--registry")
+    p = rsub.add_parser("show")
+    p.add_argument("speaker_id")
+    p.add_argument("--registry")
+    p = rsub.add_parser("rename")
+    p.add_argument("speaker_id")
+    p.add_argument("--name", required=True)
+    p.add_argument("--registry")
+    p = rsub.add_parser("delete")
+    p.add_argument("speaker_id")
+    p.add_argument("--registry")
+    p = rsub.add_parser("adapt-queue")
+    p.add_argument("--registry")
+    p = rsub.add_parser("adapt-approve")
+    p.add_argument("centroid_id")
+    p.add_argument("--registry")
+
+    p = sub.add_parser("enroll", help="register a voice from a sample file")
+    p.add_argument("--name", required=True)
+    p.add_argument("--audio", required=True)
+    p.add_argument("--consent", default="persistent")
+    p.add_argument("--registry")
+    p.add_argument("--config")
+
+    p = sub.add_parser("calibrate", help="derive thresholds from labelled pairs")
+    p.add_argument("--pairs", required=True)
+    p.add_argument("--out", default="identification.yaml")
+    p.add_argument("--config")
+    return top
+
+
+def _dispatch_subcommand(argv: list[str]) -> int:
+    args = build_subcommand_parser().parse_args(argv)
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
+                        datefmt="%H:%M:%S")
+    from . import audio as audio_mod
+    from .config import PipelineConfig
+    from .embedding import SpeakerEmbedder
+    from .registry import SpeakerRegistry
+
+    if args.cmd == "labels":
+        from .labels import apply_labels, init_labels, set_label
+        if args.labels_cmd == "init":
+            paths = init_labels(args.result, clip_count=args.clips,
+                                clip_seconds=args.clip_seconds, registry=args.registry)
+            for key, value in paths.items():
+                print(f"{key}: {value}")
+            return 0
+        if args.labels_cmd == "apply":
+            embedder = None
+            if args.config:
+                cfg = PipelineConfig.load(args.config)
+                embedder = SpeakerEmbedder(cfg.diarization.device, cfg.resolve_hf_token())
+            out = apply_labels(args.result, args.labels, registry_path=args.registry,
+                               embedder=embedder)
+            print(json.dumps(out, ensure_ascii=False, indent=2))
+            return 0
+        paths = set_label(args.result, args.speaker, args.name)
+        for p in paths:
+            print(f"-> {p}")
+        return 0
+
+    if args.cmd == "registry":
+        cfg = PipelineConfig()
+        path = args.registry or cfg.identification.registry_path
+        reg = SpeakerRegistry(path)
+        try:
+            if args.registry_cmd == "list":
+                rows = [{k: (len(v) if isinstance(v, bytes) else v)
+                         for k, v in r.items()} for r in reg.list_speakers(True)]
+                print(json.dumps(rows, ensure_ascii=False, indent=2))
+            elif args.registry_cmd == "show":
+                row = reg.get_speaker(args.speaker_id)
+                if not row:
+                    print(f"unknown speaker: {args.speaker_id}")
+                    return 1
+                print(json.dumps({k: (len(v) if isinstance(v, bytes) else v)
+                                  for k, v in row.items()}, ensure_ascii=False, indent=2))
+                print(json.dumps([{k: (len(v) if isinstance(v, bytes) else v)
+                                   for k, v in c.items()}
+                                  for c in reg.list_centroids(args.speaker_id)],
+                                 ensure_ascii=False, indent=2))
+            elif args.registry_cmd == "rename":
+                reg.rename_speaker(args.speaker_id, args.name)
+            elif args.registry_cmd == "delete":
+                reg.delete_speaker(args.speaker_id)
+            elif args.registry_cmd == "adapt-queue":
+                print(json.dumps([{k: (len(v) if isinstance(v, bytes) else v)
+                                   for k, v in c.items()} for c in reg.list_centroids(status="pending")],
+                                 ensure_ascii=False, indent=2))
+            else:
+                reg.approve_centroid(args.centroid_id)
+        finally:
+            reg.close()
+        return 0
+
+    if args.cmd == "enroll":
+        cfg = PipelineConfig.load(args.config) if args.config else PipelineConfig()
+        arr = audio_mod.decode(args.audio, cfg.audio)
+        vec = SpeakerEmbedder(cfg.diarization.device, cfg.resolve_hf_token()).embed_audio(
+            arr, cfg.audio.sample_rate)
+        if vec is None:
+            print("embedding failed; nothing registered")
+            return 1
+        reg = SpeakerRegistry(args.registry or cfg.identification.registry_path)
+        try:
+            sid = reg.add_speaker(args.name, vec, consent_scope=args.consent,
+                                  source_file=args.audio)
+        finally:
+            reg.close()
+        print(sid)
+        return 0
+
+    from .calibrate import calibrate
+    return calibrate(args.pairs, args.out,
+                      config=PipelineConfig.load(args.config) if args.config else None)
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = list(argv if argv is not None else sys.argv[1:])
+    if argv and argv[0] in {"labels", "registry", "enroll", "calibrate"}:
+        return _dispatch_subcommand(argv)
     args = build_parser().parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
