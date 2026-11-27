@@ -195,3 +195,31 @@ def test_labels_init_resolves_relative_source(tmp_path, monkeypatch):
     paths = init_labels(result_path, clip_count=1)
     assert paths["labels"].is_file()
     assert any((tmp_path / "out").glob("meeting_clips/*.wav"))
+
+
+def test_clip_windows_spread_over_utterances():
+    from sdts.labels import _clip_windows
+
+    utts = [{"start": 0.0, "end": 31.0, "text": "a"}, {"start": 33.0, "end": 69.0, "text": "b"}]
+    windows = _clip_windows(utts, clip_count=4, clip_seconds=8.0)
+    assert len(windows) == 4
+    # Both long turns contribute, instead of all windows coming from one.
+    assert {id(utt) for utt, _, _ in windows} == {id(u) for u in utts}
+    for _, start, end in windows:
+        assert 0 < end - start <= 8.0
+
+
+def test_clip_windows_skips_name_callouts():
+    from sdts.labels import _clip_windows
+
+    utts = [{"start": 0.0, "end": 40.0, "text": "long answer"},
+            {"start": 50.0, "end": 50.9, "text": "岡田さん"}]
+    windows = _clip_windows(utts, clip_count=2, clip_seconds=8.0)
+    assert all(utt["text"] == "long answer" for utt, _, _ in windows)
+
+
+def test_clip_windows_falls_back_when_all_short():
+    from sdts.labels import _clip_windows
+
+    utts = [{"start": 0.0, "end": 0.9, "text": "はい"}, {"start": 2.0, "end": 2.8, "text": "どうぞ"}]
+    assert len(_clip_windows(utts, clip_count=2, clip_seconds=8.0)) == 2

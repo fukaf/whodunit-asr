@@ -98,24 +98,26 @@ def init_labels(result_path: str | Path, *, clip_count: int = 5,
     for speaker in _speaker_ids(data):
         utts = [u for u in data["utterances"] if u["speaker"] == speaker]
         utts.sort(key=lambda u: -(u["end"] - u["start"]))
+        windows = _clip_windows(utts, clip_count, clip_seconds)
         clips: list[str] = []
         hints: list[str] = []
-        for i, utt in enumerate(utts[:clip_count]):
-            start = max(0.0, float(utt["start"]))
-            end = min(float(data.get("duration", start + clip_seconds)),
-                      start + clip_seconds)
-            if end <= start:
-                end = start + max(1.0, float(utt["end"]) - start)
+        for i, (utt, start, end) in enumerate(windows):
             arr = audio_mod.decode(source, cfg_audio, start=start, end=end)
             rel = f"{stem}_clips/{speaker}_{i:02d}.wav"
             audio_mod.write_wav(arr, out_dir / rel, cfg_audio.sample_rate)
             clips.append(rel)
-            hints.append(f"[{utt['start']:.3f}] {utt['text']}")
+            offset = start - float(utt["start"])
+            hints.append(f"[{start:.3f}] {_clip_hint(utt['text'], offset)}")
+        clip_seconds_total = sum(end - start for _, start, end in windows)
         speakers.append({
             "id": speaker,
             "display_name": "",
             "persist": False,
             "registry_id": "",
+            "total_seconds": round(sum(u["end"] - u["start"] for u in utts), 1),
+            # Enrolment from a handful of seconds yields a weak centroid; the
+            # review page warns when this falls below the suggested minimum.
+            "clip_seconds": round(clip_seconds_total, 1),
             "hints": hints,
             "clips": clips,
         })
@@ -133,6 +135,59 @@ def init_labels(result_path: str | Path, *, clip_count: int = 5,
     return {"labels": labels_path, "html": html_path, "clips": clips_dir}
 
 
+def _clip_windows(utts: list[dict[str, Any]], clip_count: int,
+                  clip_seconds: float,
+                  min_utterance: float = 2.5) -> list[tuple[dict[str, Any], float, float]]:
+    """Pick clips, allowing several windows per long utterance.
+
+    A speaker can easily be represented by a single very long utterance (one
+    uninterrupted answer, say). Restricting clips to one-per-utterance then
+    leaves almost no sample to judge the voice by, so long utterances are
+    sliced into multiple windows spread across their duration.
+
+    Very short utterances (1-2s) are often just a name being called out, e.g.
+    a chair saying "岡田さん". They sound nothing like the person they name and
+    would poison both the listening samples and the enrolment embedding, so
+    they are only used when nothing longer is available.
+    """
+    ordered = sorted(utts, key=lambda u: -float(u["end"] - u["start"]))
+    usable = [u for u in ordered if float(u["end"]) - float(u["start"]) >= min_utterance]
+    if not usable:
+        # Speaker only ever shows up in very short turns; better a short clip
+        # than none, as long as the UI makes the low quality obvious.
+        usable = ordered
+
+    # Round-robin across utterances so the samples cover different moments
+    # rather than all coming from whichever single turn happens to be longest.
+    cursors: list[float] = [float(u["start"]) for u in usable]
+    windows: list[tuple[dict[str, Any], float, float]] = []
+    while len(windows) < clip_count:
+        progressed = False
+        for i, utt in enumerate(usable):
+            if len(windows) >= clip_count:
+                break
+            start, end = cursors[i], float(utt["end"])
+            if start >= end - 0.05:
+                continue
+            stop = min(end, start + clip_seconds)
+            windows.append((utt, start, stop))
+            cursors[i] = stop + 0.5     # small hop so windows do not abut
+            progressed = True
+        if not progressed:
+            break
+    return windows
+
+
+def _clip_hint(text: str, seconds_offset: float) -> str:
+    """Show the text that is actually audible inside the clip."""
+    if seconds_offset <= 0.05 or not text:
+        return text
+    # ~7 Japanese characters per second; approximate, only for the preview.
+    cut = int(seconds_offset * 7)
+    remaining = text[cut:].strip()
+    return remaining or text
+
+
 def _render_html(labels: dict[str, Any]) -> str:
     payload = json.dumps(labels, ensure_ascii=False).replace("<", "\\u003c")
     sections = []
@@ -140,9 +195,15 @@ def _render_html(labels: dict[str, Any]) -> str:
         hints = "".join(f"<li>{h}</li>" for h in spk["hints"])
         clips = "".join(
             f'<audio controls preload="none" src="{c}"></audio>' for c in spk["clips"])
+        seconds = spk.get("clip_seconds", 0.0)
+        warn = ""
+        if seconds < 10:
+            warn = (f'<p class="warn">仅 {seconds:.0f} 秒可用样本，声纹会偏弱；'
+                    f'建议只做会话内别名，不要保存到声纹库。</p>')
         sections.append(f"""
 <section class="speaker">
-  <h2>{spk['id']}</h2>
+  <h2>{spk['id']} <span class="meta">{seconds:.0f}s / {len(spk['clips'])} 段</span></h2>
+  {warn}
   <ul>{hints}</ul>
   <div class="clips">{clips}</div>
   <label>姓名 <input type="text" class="name" value="{spk['display_name']}"></label>
@@ -158,6 +219,9 @@ body {{ font-family: system-ui, sans-serif; max-width: 860px; margin: 24px auto;
             margin: 12px 0; }}
 h1 {{ font-size: 20px; font-weight: 500; }}
 h2 {{ font-size: 15px; font-weight: 500; }}
+.meta {{ font-size: 12px; font-weight: 400; color: #7a7873; margin-left: 8px; }}
+.warn {{ font-size: 13px; color: #8a5a1a; background: #fdf6e8; border-left: 3px solid
+         #d9a441; padding: 6px 10px; margin: 6px 0; }}
 audio {{ height: 32px; margin: 2px 8px 2px 0; }}
 input[type=text] {{ padding: 4px 6px; }}
 button {{ padding: 8px 14px; font-size: 14px; cursor: pointer; }}
