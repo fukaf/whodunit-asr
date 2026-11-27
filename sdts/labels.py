@@ -9,6 +9,7 @@ import json
 import wave
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import numpy as np
 
@@ -188,13 +189,19 @@ def _clip_hint(text: str, seconds_offset: float) -> str:
     return remaining or text
 
 
+def _href(rel_path: str) -> str:
+    """URL-encode a clip path so names with spaces/CJK still resolve in a browser."""
+    return quote(rel_path.replace("\\", "/"))
+
+
 def _render_html(labels: dict[str, Any]) -> str:
     payload = json.dumps(labels, ensure_ascii=False).replace("<", "\\u003c")
     sections = []
     for spk in labels["speakers"]:
         hints = "".join(f"<li>{h}</li>" for h in spk["hints"])
         clips = "".join(
-            f'<audio controls preload="none" src="{c}"></audio>' for c in spk["clips"])
+            f'<audio controls preload="none" src="{_href(c)}"></audio>'
+            for c in spk["clips"])
         seconds = spk.get("clip_seconds", 0.0)
         warn = ""
         if seconds < 10:
