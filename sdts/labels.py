@@ -59,14 +59,34 @@ def _speaker_ids(data: dict[str, Any]) -> list[str]:
     return sorted(seen)
 
 
+def _resolve_source(source: str | Path | None, result_path: Path) -> Path:
+    """Resolve `meta.source`, which older results stored as a relative path."""
+    if not source:
+        raise FileNotFoundError(
+            "result JSON has no meta.source; re-run transcription to record it")
+    raw = Path(source).expanduser()
+    if raw.is_file():
+        return raw.resolve()
+    if not raw.is_absolute():
+        # Try relative to the result file's directory, then to its parent
+        # (the common `out/` + `data/` sibling layout), then upward.
+        for base in (result_path.parent, result_path.parent.parent):
+            cand = (base / raw)
+            if cand.is_file():
+                return cand.resolve()
+        for base in (result_path.parent, result_path.parent.parent):
+            cand = (base / raw.name)
+            if cand.is_file():
+                return cand.resolve()
+    raise FileNotFoundError(f"source audio in result meta not found: {source}")
+
+
 def init_labels(result_path: str | Path, *, clip_count: int = 5,
                 clip_seconds: float = 8.0, registry_path: str | None = None) -> dict[str, Path]:
     """Create labels JSON, short speaker clips and a local review HTML page."""
     result_path = Path(result_path).expanduser().resolve()
     data = load_result(result_path)
-    source = data.get("meta", {}).get("source")
-    if not source or not Path(source).is_file():
-        raise FileNotFoundError(f"source audio in result meta not found: {source}")
+    source = str(_resolve_source(data.get("meta", {}).get("source"), result_path))
 
     stem = result_path.stem
     out_dir = result_path.parent

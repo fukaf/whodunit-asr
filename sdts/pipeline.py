@@ -131,7 +131,7 @@ class Pipeline:
             speakers=speakers,
             duration=info.duration,
             meta={
-                "source": str(info.path),
+                "source": str(info.path.expanduser().resolve()),
                 "codec": info.codec,
                 "sample_rate": info.sample_rate,
                 "channels": info.channels,

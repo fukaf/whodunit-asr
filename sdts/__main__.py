@@ -168,7 +168,8 @@ def _dispatch_subcommand(argv: list[str]) -> int:
         from .labels import apply_labels, init_labels, set_label
         if args.labels_cmd == "init":
             paths = init_labels(args.result, clip_count=args.clips,
-                                clip_seconds=args.clip_seconds, registry=args.registry)
+                                clip_seconds=args.clip_seconds,
+                                registry_path=args.registry)
             for key, value in paths.items():
                 print(f"{key}: {value}")
             return 0

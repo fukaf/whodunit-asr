@@ -149,3 +149,49 @@ def test_labels_init_and_apply(tmp_path, monkeypatch):
     reg = SpeakerRegistry(reg_path)
     assert reg.list_speakers()[0]["display_name"] == "张三"
     reg.close()
+
+
+def test_labels_init_from_cli_passes_arguments(tmp_path, monkeypatch):
+    """Regression: `labels init` must forward --registry under the arg name
+    init_labels() actually accepts."""
+    from sdts import __main__ as cli
+    from sdts import audio as audio_mod
+
+    source = tmp_path / "source.wav"
+    audio_mod.write_wav(np.zeros(32000, dtype=np.float32), source)
+    result_path = tmp_path / "meeting.json"
+    result_path.write_text(json.dumps({
+        "language": "ja", "duration": 2.0, "speakers": ["SPEAKER_00"],
+        "utterances": [{"speaker": "SPEAKER_00", "start": 0.0, "end": 1.5,
+                        "text": "こんにちは", "words": []}],
+        "meta": {"source": str(source)},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    reg_path = tmp_path / "custom.db"
+    monkeypatch.chdir(tmp_path)
+    code = cli.main(["labels", "init", str(result_path),
+                     "--clips", "1", "--registry", str(reg_path)])
+    assert code == 0
+    assert (tmp_path / "meeting.labels.json").is_file()
+    assert load_result(tmp_path / "meeting.labels.json")["registry"] == str(reg_path)
+
+
+def test_labels_init_resolves_relative_source(tmp_path, monkeypatch):
+    """Older results stored a CWD-relative meta.source; resolve it against the
+    result file's directory instead of the current working directory."""
+    from sdts import audio as audio_mod
+
+    audio_mod.write_wav(np.zeros(32000, dtype=np.float32), tmp_path / "src.wav")
+    result_path = tmp_path / "out" / "meeting.json"
+    result_path.parent.mkdir()
+    result_path.write_text(json.dumps({
+        "language": "ja", "duration": 2.0, "speakers": ["SPEAKER_00"],
+        "utterances": [{"speaker": "SPEAKER_00", "start": 0.0, "end": 1.5,
+                        "text": "こんにちは", "words": []}],
+        "meta": {"source": "src.wav"},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path / "out")
+    paths = init_labels(result_path, clip_count=1)
+    assert paths["labels"].is_file()
+    assert any((tmp_path / "out").glob("meeting_clips/*.wav"))
