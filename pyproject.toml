@@ -4,7 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sdts"
-version = "0.1.0"
+# Single source of truth: sdts/__init__.py. Bumping a version is done there and
+# in CHANGELOG.md (see docs/versioning.md); tests/test_version.py keeps the two
+# in agreement.
+dynamic = ["version"]
 description = "Speaker-diarized speech transcription with Whisper + pyannote"
 requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
@@ -28,6 +31,9 @@ sdts = "sdts.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["sdts*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "sdts.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
