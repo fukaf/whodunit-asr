@@ -9,8 +9,13 @@ def _changelog() -> str:
 
 
 def test_changelog_documents_current_version():
-    """A released version must have a heading with a date in CHANGELOG.md."""
-    assert sdts.__version__ == "0.2.0"
+    """A released version must have a heading with a date in CHANGELOG.md.
+
+    The expected version is read from the single source of truth, not
+    duplicated here: otherwise every release commit would have to touch a test
+    file as well, which breaks the rule that a release commit contains only the
+    changelog and the version bump.
+    """
     heading = f"## [{sdts.__version__}] - "
     assert heading in _changelog(), f"CHANGELOG.md has no `{heading}` section"
 
@@ -18,7 +23,8 @@ def test_changelog_documents_current_version():
 def test_changelog_has_unreleased_section_first():
     """Entries accumulate under [Unreleased] before a release promotes them."""
     text = _changelog()
-    assert text.index("## [Unreleased]") < text.index("## [0.2.0]")
+    assert text.index("## [Unreleased]") < text.index(
+        f"## [{sdts.__version__}]")
 
 
 def test_version_is_reported_by_the_cli_package():
