@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-title="settings.title">
+<header class="top">
+  <span class="brand" data-i18n="app.name"></span>
+  <nav class="main">
+    <a href="index.html" data-i18n="nav.new"></a>
+    <a href="registry.html" data-i18n="nav.registry"></a>
+    <a href="settings.html" class="active" data-i18n="nav.settings"></a>
+    <a href="/api/docs" target="_blank" rel="noopener" data-i18n="nav.docs"></a>
+  </nav>
+  <div class="spacer"></div>
+  <div data-lang-switch></div>
+</header>
+
+<main>
+  <div id="flash"></div>
+
+  <h1 data-i18n="settings.title"></h1>
+  <p class="sub" data-i18n="settings.thresholds"></p>
+
+  <section class="card">
+    <div class="row between" style="margin-bottom:10px">
+      <div>
+        <div class="faint" data-i18n="settings.base"></div>
+        <div class="mono" id="base-path">—</div>
+      </div>
+      <div class="faint mono" id="meta"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+      <label class="field">
+        <span data-i18n="settings.accept"></span>
+        <input type="number" id="accept" step="0.01" min="0" max="1">
+      </label>
+      <label class="field">
+        <span data-i18n="settings.reject"></span>
+        <input type="number" id="reject" step="0.01" min="0" max="1">
+      </label>
+      <label class="field">
+        <span data-i18n="settings.margin"></span>
+        <input type="number" id="margin" step="0.01" min="0" max="1">
+      </label>
+    </div>
+
+    <div class="row" style="margin-top:6px">
+      <input type="text" id="target" class="mono" style="max-width:420px">
+      <button class="primary" id="save" data-i18n="settings.save"></button>
+    </div>
+    <p class="faint">
+      <code class="mono">sdts calibrate --pairs pairs.csv --out identification.yaml</code>
+    </p>
+  </section>
+</main>
+
+<script type="module">
+import { initI18n, t } from "./i18n.js";
+import { api, el, clear, banner, errorText } from "./common.js";
+
+initI18n();
+
+const flash = document.getElementById("flash");
+let defaults = null;
+
+async function load() {
+  try {
+    defaults = await api("/api/config/defaults");
+  } catch (err) {
+    banner(flash, errorText(err, t));
+    return;
+  }
+  const ident = defaults.config.identification || {};
+  document.getElementById("accept").value = ident.accept_threshold ?? 0.7;
+  document.getElementById("reject").value = ident.reject_threshold ?? 0.55;
+  document.getElementById("margin").value = ident.margin ?? 0.1;
+  document.getElementById("base-path").textContent = defaults.base_config || t("settings.none");
+  document.getElementById("meta").textContent =
+    `sdts ${defaults.version} · ${defaults.data_dir} · ${defaults.registry}`;
+  const target = document.getElementById("target");
+  if (!target.value) {
+    target.value = defaults.base_config || defaults.base_config_default || "";
+    target.placeholder = "configs/identification.yaml";
+  }
+}
+
+document.getElementById("save").addEventListener("click", async () => {
+  const path = document.getElementById("target").value.trim();
+  if (!path) { banner(flash, "path"); return; }
+  const config = structuredClone(defaults.config);
+  config.identification = {
+    ...(config.identification || {}),
+    accept_threshold: Number(document.getElementById("accept").value),
+    reject_threshold: Number(document.getElementById("reject").value),
+    margin: Number(document.getElementById("margin").value),
+  };
+  try {
+    const out = await api("/api/config/file", { method: "PUT", body: { path, config } });
+    banner(flash, t("settings.saved", { path: out.path }), "ok");
+  } catch (err) {
+    banner(flash, errorText(err, t));
+  }
+});
+
+document.addEventListener("sdts:langchange", () => { if (defaults) load(); });
+load();
+</script>
+</body>
+</html>

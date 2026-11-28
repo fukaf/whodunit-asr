@@ -37,5 +37,14 @@ pyyaml>=6.0
 # funasr>=1.2.0
 # modelscope>=1.20.0
 
+# Optional: the local review workbench (`sdts serve` + `sdts/web`).
+#   pip install sdts[web]   or   pip install -r requirements.txt (with these on)
+# Binds 127.0.0.1 only; it is not designed to be reachable from other machines.
+# fastapi>=0.115,<1
+# uvicorn>=0.30,<1
+# python-multipart>=0.0.9
+
 # Dev
 pytest>=8.0
+httpx>=0.27                # ASGITransport for the server tests
+pytest-asyncio>=0.24       # async fixtures for the ASGI client

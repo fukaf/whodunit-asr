@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcript</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-title="job.title">
+<header class="top">
+  <span class="brand" data-i18n="app.name"></span>
+  <nav class="main">
+    <a href="index.html" data-i18n="nav.new"></a>
+    <a href="registry.html" data-i18n="nav.registry"></a>
+    <a href="settings.html" data-i18n="nav.settings"></a>
+    <a href="/api/docs" target="_blank" rel="noopener" data-i18n="nav.docs"></a>
+  </nav>
+  <div class="spacer"></div>
+  <div data-lang-switch></div>
+</header>
+
+<main>
+  <div id="flash"></div>
+
+  <div class="row between" style="margin-bottom:6px">
+    <div>
+      <h1 id="job-name">…</h1>
+      <div class="sub" id="job-facts"></div>
+    </div>
+    <div class="row">
+      <button id="cancel" hidden data-i18n="job.cancel"></button>
+      <div class="row" id="exports" hidden></div>
+    </div>
+  </div>
+
+  <!-- live progress -->
+  <section class="card" id="progress-card">
+    <div class="progress-head">
+      <span class="stage" id="stage-label">…</span>
+      <span class="count" id="stage-count"></span>
+      <span class="spacer"></span>
+      <span class="mono faint" id="progress-pct"></span>
+    </div>
+    <div class="bar" id="progress-bar"><i style="width:0%"></i></div>
+    <p class="faint" id="progress-note" style="margin:8px 0 0"></p>
+  </section>
+
+  <div class="layout" style="margin-top:16px">
+    <section>
+      <div class="row between">
+        <h2 style="margin-top:0" data-i18n="job.title"></h2>
+        <input type="search" id="search" style="max-width:220px" data-i18n-placeholder="job.filters.search">
+      </div>
+      <div class="card" style="padding:6px 14px">
+        <div id="transcript" class="transcript"><div class="empty" data-i18n="job.waiting"></div></div>
+      </div>
+    </section>
+
+    <aside>
+      <h2 style="margin-top:0" data-i18n="job.speakers.title"></h2>
+      <div id="speakers"></div>
+      <audio id="player" preload="none" style="width:100%;margin-top:6px" hidden></audio>
+    </aside>
+  </div>
+</main>
+
+<script type="module">
+import { initI18n, t, getLang } from "./i18n.js";
+import { api, el, clear, banner, errorText, fmtClock, fmtDuration, statusClass } from "./common.js";
+
+initI18n();
+
+const params = new URLSearchParams(location.search);
+const jobId = params.get("id");
+const flash = document.getElementById("flash");
+const player = document.getElementById("player");
+
+const COLOURS = ["#3b6ea5", "#b5651d", "#4a7a4a", "#8a4a8a", "#a83a32", "#3d7a7a",
+                 "#7a6a2f", "#5a5a8a", "#8a5a3a", "#2f7d4f"];
+
+const state = {
+  summary: null,
+  utterances: [],
+  speakers: new Map(),   // id -> {display_name, colour}
+  filter: null,          // speaker id or null
+  search: "",
+  es: null,
+  poll: null,
+};
+
+if (!jobId) {
+  location.replace("index.html");
+}
+
+function unitSet() {
+  return { seconds: t("common.seconds"), minutes: t("common.minutes") };
+}
+
+/* -- progress ---------------------------------------------------------- */
+function renderProgress(job) {
+  const stage = t(`job.stage.${job.stage}`) || job.stage;
+  document.getElementById("stage-label").textContent = stage;
+  const count = document.getElementById("stage-count");
+  if (job.stage === "chunk" && job.stage_total > 1) {
+    count.textContent = t("job.progress.chunk", { done: job.stage_done, total: job.stage_total });
+  } else {
+    count.textContent = "";
+  }
+  const pct = Math.round((job.progress || 0) * 100);
+  document.getElementById("progress-pct").textContent = job.status === "done" ? "100%" : `${pct}%`;
+  const bar = document.getElementById("progress-bar");
+  bar.className = `bar ${job.status === "done" ? "done" : ""} ${job.status === "failed" ? "failed" : ""}`;
+  bar.firstElementChild.style.width = `${job.status === "done" ? 100 : pct}%`;
+
+  const note = document.getElementById("progress-note");
+  if (job.status === "failed") note.textContent = job.error || "";
+  else if (job.status === "cancelled") note.textContent = t("job.stage.cancelled");
+  else if (job.cancelling) note.textContent = t("job.cancelling");
+  else if (job.status === "running") note.textContent = t("job.cancel.note");
+  else note.textContent = "";
+
+  const finished = ["done", "failed", "cancelled"].includes(job.status);
+  document.getElementById("cancel").hidden = finished;
+  document.getElementById("exports").hidden = job.status !== "done";
+  if (finished && job.status === "done") document.getElementById("progress-card").hidden = true;
+  if (finished && state.es) { state.es.close(); state.es = null; }
+
+  document.getElementById("job-name").textContent = job.source_name || job.id;
+  const facts = [];
+  if (job.meta?.duration) facts.push(`${t("job.meta.duration")} ${fmtClock(job.meta.duration)}`);
+  if (job.meta?.language) facts.push(`${t("job.meta.language")} ${job.meta.language}`);
+  if (job.meta?.utterances) facts.push(`${t("job.meta.utterances")} ${job.meta.utterances}`);
+  if (job.meta?.rtf) facts.push(`RTF ${job.meta.rtf}`);
+  document.getElementById("job-facts").textContent = facts.join(" · ");
+}
+
+/* -- speakers ---------------------------------------------------------- */
+function colourFor(id) {
+  let hash = 0;
+  for (const ch of id) hash = (hash * 31 + ch.charCodeAt(0)) % 9973;
+  return COLOURS[hash % COLOURS.length];
+}
+
+function renderSpeakers() {
+  const host = clear(document.getElementById("speakers"));
+  if (!state.summary) return;
+  for (const spk of state.summary.speakers) {
+    const colour = colourFor(spk.id);
+    const nameInput = el("input", {
+      type: "text", value: spk.display_name || "",
+      placeholder: t("job.speakers.name.placeholder"),
+    });
+    nameInput.addEventListener("change", () => rename(spk.id, nameInput.value));
+    nameInput.addEventListener("keydown", (e) => { if (e.key === "Enter") nameInput.blur(); });
+    const decision = spk.decision ? t(`job.speakers.decision.${spk.decision}`) : "";
+    const facts = [`${t("job.speakers.turns", { n: spk.turns })} · ${fmtDuration(spk.seconds, unitSet())}`];
+    if (decision) facts.push(decision);
+    if (spk.score !== null && spk.score !== undefined) facts.push(t("job.speakers.score", { score: spk.score }));
+
+    // A `review`-mode job still computes `best`; it just does not apply it.
+    // Offer one-click acceptance so a confident match is not lost, and show
+    // the candidate name explicitly - a bare score is meaningless to a human.
+    const suggestion = spk.decision === "accept" && spk.best && !spk.display_name
+      ? el("div", { class: "row", style: "margin-top:6px" }, [
+          el("span", { class: "faint", style: "flex:1",
+                       text: t("job.speakers.suggested", { name: spk.best }) }),
+          el("button", {
+            class: "primary", style: "padding:2px 9px;font-size:12px",
+            text: t("job.speakers.apply"),
+            onclick: () => {
+              nameInput.value = spk.best;
+              rename(spk.id, spk.best);
+            },
+          }),
+        ])
+      : null;
+
+    host.appendChild(el("div", { class: "speaker-card" }, [
+      el("div", { class: "head" }, [
+        el("span", { class: "dot", style: `background:${colour}` }),
+        el("span", { class: "id", text: spk.id }),
+      ]),
+      el("div", { style: "margin-top:6px" }, [nameInput]),
+      suggestion,
+      el("div", { class: "facts", text: facts.join(" · ") }),
+    ]));
+  }
+  host.appendChild(el("p", { class: "faint", text: t("job.speakers.rename.hint") }));
+}
+
+async function rename(speaker, name) {
+  try {
+    const out = await api(`/api/jobs/${jobId}/rename`, { method: "POST", body: { speaker, name } });
+    state.summary.speakers = out.speakers;
+    for (const utt of state.utterances) {
+      if (utt.speaker === speaker) {
+        utt.speaker_display = name.trim() || null;
+      }
+    }
+    renderSpeakers();
+    renderTranscript();
+  } catch (err) {
+    banner(flash, errorText(err, t));
+  }
+}
+
+/* -- transcript -------------------------------------------------------- */
+function displayName(utt) {
+  return utt.speaker_display || utt.speaker;
+}
+
+function renderTranscript() {
+  const host = clear(document.getElementById("transcript"));
+  const query = state.search.toLowerCase();
+  let shown = 0;
+  for (const utt of state.utterances) {
+    if (state.filter && utt.speaker !== state.filter) continue;
+    if (query && !utt.text.toLowerCase().includes(query)
+        && !displayName(utt).toLowerCase().includes(query)) continue;
+    shown += 1;
+    const colour = colourFor(utt.speaker);
+    const playBtn = el("button", {
+      class: "ghost play", title: t("job.play"),
+      onclick: () => playFrom(utt),
+    }, "▶");
+    host.appendChild(el("div", { class: "utt" }, [
+      el("div", { class: "when", text: fmtClock(utt.start) }),
+      el("div", {}, [
+        el("div", { class: "who" }, [
+          el("span", { class: "dot", style: `background:${colour};width:8px;height:8px;border-radius:50%;display:inline-block` }),
+          el("span", { text: displayName(utt) }),
+          playBtn,
+        ]),
+        el("div", { class: "text", text: utt.text }),
+      ]),
+    ]));
+  }
+  if (!shown) {
+    host.appendChild(el("div", { class: "empty", text: state.utterances.length ? t("job.filters.all") : t("job.waiting") }));
+  }
+}
+
+function playFrom(utt) {
+  player.hidden = false;
+  const start = Math.max(0, utt.start - 0.25);
+  const end = utt.end + 0.4;
+  // `/clip` decodes server-side: seeking the raw <audio> to a timestamp is
+  // accurate for wav but drifts badly on long compressed files.
+  player.src = `/api/jobs/${jobId}/clip?start=${start.toFixed(2)}&seconds=${Math.max(1, end - start).toFixed(2)}`;
+  player.play().catch(() => {});
+}
+
+document.getElementById("search").addEventListener("input", (e) => {
+  state.search = e.target.value;
+  renderTranscript();
+});
+
+/* -- exports ----------------------------------------------------------- */
+function renderExports() {
+  const host = clear(document.getElementById("exports"));
+  for (const fmt of ["txt", "srt", "json", "md"]) {
+    const a = el("a", {
+      href: `/api/jobs/${jobId}/export?fmt=${fmt}`,
+      download: "",
+      class: "chip",
+      text: t(`job.export.${fmt}`),
+    });
+    host.appendChild(a);
+  }
+}
+
+document.getElementById("cancel").addEventListener("click", async () => {
+  const btn = document.getElementById("cancel");
+  btn.disabled = true;
+  btn.textContent = t("job.cancelling");
+  try {
+    const { job } = await api(`/api/jobs/${jobId}/cancel`, { method: "POST" });
+    renderProgress(job);
+  } catch (err) {
+    banner(flash, errorText(err, t));
+    btn.disabled = false;
+    btn.textContent = t("job.cancel");
+  }
+});
+
+/* -- data loading ------------------------------------------------------ */
+async function loadSummary() {
+  try {
+    const data = await api(`/api/jobs/${jobId}/summary`);
+    state.summary = data;
+    renderProgress(data.job);
+    const finished = ["done", "failed", "cancelled"].includes(data.job.status);
+    if (finished) {
+      stopPolling();
+      if (data.result_ready) {
+        renderSpeakers();
+        renderExports();
+        await loadTranscript();
+      }
+    } else {
+      // The job may have been queued before this page opened. SSE gives us
+      // smooth updates, and a slow poll is the safety net if the stream is
+      // interrupted (or the server is restarted mid-job).
+      if (!state.es) watch();
+      startPolling();
+    }
+  } catch (err) {
+    if (err.status === 404) { location.replace("index.html"); return; }
+    banner(flash, errorText(err, t));
+  }
+}
+
+function startPolling() {
+  if (state.poll) return;
+  state.poll = setInterval(async () => {
+    try {
+      const { job } = await api(`/api/jobs/${jobId}`);
+      if (state.summary) state.summary.job = job;
+      renderProgress(job);
+      if (["done", "failed", "cancelled"].includes(job.status)) loadSummary();
+    } catch { /* EventSource or the next poll will catch up */ }
+  }, 3000);
+}
+
+function stopPolling() {
+  if (state.poll) { clearInterval(state.poll); state.poll = null; }
+}
+
+async function loadTranscript() {
+  try {
+    const data = await api(`/api/jobs/${jobId}/result`);
+    state.utterances = data.utterances || [];
+    renderTranscript();
+  } catch (err) {
+    banner(flash, errorText(err, t));
+  }
+}
+
+function watch() {
+  // EventSource reconnects on its own; `end` closes it for good.
+  const es = new EventSource(`/api/jobs/${jobId}/events`);
+  state.es = es;
+  es.addEventListener("progress", (e) => {
+    const data = JSON.parse(e.data);
+    const job = state.summary?.job;
+    if (!job) return;
+    job.stage = data.stage; job.stage_done = data.done;
+    job.stage_total = data.total; job.progress = data.progress;
+    renderProgress(job);
+  });
+  es.addEventListener("started", (e) => {
+    const job = JSON.parse(e.data).job;
+    if (state.summary) state.summary.job = job;
+    renderProgress(job);
+  });
+  es.addEventListener("result", (e) => {
+    const job = JSON.parse(e.data).job;
+    if (state.summary) state.summary.job = job;
+    renderProgress(job);
+    loadSummary();
+  });
+  es.addEventListener("failed", (e) => {
+    const data = JSON.parse(e.data);
+    if (state.summary) { state.summary.job.status = "failed"; state.summary.job.error = data.error; }
+    renderProgress(state.summary.job);
+    loadSummary();
+  });
+  es.addEventListener("cancelled", () => loadSummary());
+  es.addEventListener("end", (e) => {
+    es.close();
+    state.es = null;
+    try {
+      const data = JSON.parse(e.data);
+      if (state.summary) state.summary.job.status = data.status;
+    } catch { /* keepalive frame */ }
+    loadSummary();
+  });
+  es.onerror = () => {
+    // EventSource reconnects by itself. If it cannot (server was stopped),
+    // `state.es` stays set, so the polling fallback keeps the page honest.
+  };
+}
+
+document.addEventListener("sdts:langchange", () => {
+  if (state.summary) {
+    renderProgress(state.summary.job);
+    renderSpeakers();
+    renderTranscript();
+    renderExports();
+    document.getElementById("cancel").textContent = t("job.cancel");
+  }
+});
+
+loadSummary();
+</script>
+</body>
+</html>

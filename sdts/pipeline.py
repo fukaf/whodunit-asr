@@ -20,7 +20,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -35,6 +37,41 @@ from .identify import identify_speakers
 from .types import Segment, TranscriptResult, Turn, Utterance, Word
 
 log = logging.getLogger(__name__)
+
+# Progress callback: (stage_name, done, total). See `Pipeline.run`.
+ProgressHook = Callable[[str, int, int], None]
+
+# A hook may raise this to abort the run: the pipeline treats it as "stop
+# cleanly" and re-raises it to the caller instead of a traceback from a worker
+# thread. `sdts.server.cancel` defines the concrete class; naming it here keeps
+# the pipeline free of any dependency on the web layer.
+_CANCEL_EXCEPTIONS: tuple[type[BaseException], ...] = ()
+
+
+def register_cancel_exception(exc_type: type[BaseException]) -> None:
+    """Let `_emit` re-raise `exc_type` instead of logging and continuing."""
+    global _CANCEL_EXCEPTIONS
+    if exc_type not in _CANCEL_EXCEPTIONS:
+        _CANCEL_EXCEPTIONS = _CANCEL_EXCEPTIONS + (exc_type,)
+
+
+def _emit(hook: ProgressHook | None, stage: str, done: int, total: int = 1) -> None:
+    """Report progress without ever letting a reporter break the run.
+
+    The callback is owned by the caller (the web workbench, a test, a script).
+    A crashing listener must not lose a transcription that already cost
+    minutes of GPU time, so failures are logged and swallowed - with one
+    exception: a registered cancellation signal is re-raised so the caller can
+    stop the job deliberately.
+    """
+    if hook is None:
+        return
+    try:
+        hook(stage, done, total)
+    except _CANCEL_EXCEPTIONS:
+        raise
+    except Exception as exc:  # noqa: BLE001 - see docstring
+        log.warning("progress callback failed at %s (%s); continuing", stage, exc)
 
 
 class Pipeline:
@@ -74,14 +111,25 @@ class Pipeline:
         return self._embedder
 
     # -- main entry --------------------------------------------------------
-    def run(self, path: str | Path, num_speakers: int | None = None) -> TranscriptResult:
+    def run(self, path: str | Path, num_speakers: int | None = None, *,
+            on_stage: ProgressHook | None = None) -> TranscriptResult:
+        """Transcribe one file end to end.
+
+        `on_stage(name, done, total)` fires at every point where a long job can
+        sit for minutes without visible output. It carries no payload beyond
+        the two counters, so the callback can be a log line, a progress bar or
+        an HTTP event publish without this module knowing about any of them.
+        Leaving it as `None` costs one branch per stage and changes nothing.
+        """
         t0 = time.perf_counter()
+        _emit(on_stage, "probe", 0, 1)
         info = audio_mod.probe(path)
         log.info("input %s: %.1fs, %d Hz, %d ch, %s",
                  info.path.name, info.duration, info.sample_rate, info.channels, info.codec)
 
         chunks = audio_mod.plan_chunks(info.duration, self.cfg.audio)
         stride = (self.cfg.audio.chunk_seconds - self.cfg.audio.chunk_overlap_seconds)
+        _emit(on_stage, "probe", 1, 1)
 
         local_segments: list[Segment] = []
         local_turns: list[Turn] = []
@@ -90,6 +138,7 @@ class Pipeline:
 
         for idx, (c_start, c_end) in enumerate(chunks):
             log.info("chunk %d/%d  [%.1f, %.1f]", idx + 1, len(chunks), c_start, c_end)
+            _emit(on_stage, "chunk", idx, len(chunks))
             arr = audio_mod.decode(path, self.cfg.audio, c_start, c_end)
             core_end = c_end if idx == len(chunks) - 1 else min(c_end, c_start + stride)
 
@@ -99,6 +148,10 @@ class Pipeline:
 
             segments, lang = self.engine.transcribe(arr, self.cfg.asr.language)
             detected_lang = detected_lang or lang
+            # Emitted after ASR rather than after diarization: the two are one
+            # opaque unit of work per chunk, and a progress bar that only moves
+            # once per completed chunk is the honest granularity here.
+            _emit(on_stage, "chunk", idx + 1, len(chunks))
             segments = [Segment(s.start + c_start, s.end + c_start, s.text, s.words,
                                 s.language, s.avg_logprob) for s in segments]
             segments = [s for s in segments if c_start <= (s.start + s.end) / 2 < core_end]
@@ -120,7 +173,11 @@ class Pipeline:
             local_turns.extend(turns)
             chunk_audio.append(arr)
 
+        _emit(on_stage, "reconcile", 0, 1)
         turns = self._reconcile_speakers(local_turns, chunk_audio, chunks, stride, num_speakers)
+        _emit(on_stage, "reconcile", 1, 1)
+
+        _emit(on_stage, "fuse", 0, 1)
         utterances = fuse(local_segments, turns, self.cfg.merge)
         utterances = [u for u in utterances if u.text.strip()]
 
@@ -144,11 +201,15 @@ class Pipeline:
                 "rtf": round((time.perf_counter() - t0) / max(info.duration, 1e-6), 4),
             },
         )
+        _emit(on_stage, "fuse", 1, 1)
         if self.cfg.identification.enabled:
+            _emit(on_stage, "identify", 0, 1)
             result.meta["identification"] = identify_speakers(
                 result, turns=turns, embedder=self.embedder,
                 cfg=self.cfg.identification, chunk_audio=chunk_audio,
                 chunks=chunks, stride=stride)
+            _emit(on_stage, "identify", 1, 1)
+        _emit(on_stage, "done", 1, 1)
         return result
 
     # -- cross-chunk speaker reconciliation --------------------------------

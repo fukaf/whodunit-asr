@@ -13,7 +13,88 @@ Change types: **Added** · **Changed** · **Fixed** · **Removed** · **Deprecat
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Local web workbench** (`python -m sdts serve`): a browser UI over the
+  existing pipeline with four pages — new job (upload or local path), live job
+  view, voice gallery and settings. Static `sdts/web/` assets need no build
+  step; FastAPI/uvicorn are an optional `sdts[web]` extra, so the CLI install
+  stays unchanged.
+- **Three-language interface**: 中文 / English / 日本語 on every page, with the
+  choice persisted in `localStorage` and mirrored to `<html lang>`. Missing keys
+  fall back to English and are reported by `I18N.missing()`; a test asserts all
+  three dictionaries have identical key sets.
+- **Live job progress**: `Pipeline.run(on_stage=…)` emits `probe`, `chunk`,
+  `reconcile`, `fuse`, `identify` and `done` events. The server fans them out
+  over SSE with a 200-event replay, so a reload mid-job does not lose earlier
+  stages. Passing no callback (every existing caller) changes nothing.
+- **Cooperative cancellation**: a job cancel flag is checked on stage
+  boundaries, the only point where stopping is cheap and safe. A chunk already
+  running finishes first; the UI says so rather than pretending an instant stop.
+- **Job state on disk**: `<data-dir>/jobs/<id>.json` records survive a page
+  reload. A job left `queued`/`running` by a crash is marked `failed` on restart
+  instead of appearing to run forever.
+- **In-browser transcript review**: per-`SPEAKER_0i` cards show identification
+  decisions/scores, accept a display name, and regenerate the `txt`/`srt`/`md`
+  exports. A ▶ button fetches a server-decoded WAV slice of that turn.
+- **Voice-gallery management**: list / enrol / rename / revoke / delete
+  through the UI. Vectors never leave the process; hard delete requires an
+  explicit `?confirm=true`.
+- **Config endpoint**: reads/writes YAML through `PipelineConfig.from_dict` so
+  unknown keys and bad enums fail before anything is written; `hf_token` is
+  stripped from every response.
+- **Documentation**: `docs/web-ui.md` (start, page guide, REST table, security
+  posture, limits) and a linked section in both READMEs.
+
+### Changed
+
+- New jobs go through a single-worker `ThreadPoolExecutor`: one transcription
+  at a time so two jobs cannot compete for the same GPU memory. Later jobs wait
+  in `queued`.
+- The JSON written at the end of a job now keeps `speaker_display: null` for
+  unnamed speakers. Previously `Utterance.to_dict()` silently substituted the
+  raw `SPEAKER_0i` label, which made the rename form look pre-filled. The same
+  correction already existed in `labels.apply_labels`.
+- `sdts dev` now includes `pytest-asyncio`; the ASGI tests run in-process with
+  `httpx.ASGITransport` and need no port, GPU or model download.
+
+### Fixed
+
+- Voice matching in the new-job form silently used `mode: review`, so accepted
+  matches were displayed as suggestions but never applied to the transcript.
+  The form now asks for the mode explicitly (`review` = suggest only, `auto` =
+  apply names), defaults to `auto` when the box is ticked, and the job page
+  shows an **Apply** button with the candidate name for accepted matches —
+  including jobs produced by the old UI. A bare score is no longer shown
+  without the name it belongs to.
+- Opening a job page while the job was still queued or running returned `409`
+  from `/api/jobs/{id}/summary`, so the page never subscribed to SSE and stayed
+  at `...` until a manual reload. `/summary` now answers for every job state
+  (with empty result fields until the job is done), the page polls `/api/jobs`
+  every 3 s as a fallback if the event stream is interrupted, and a finished
+  job is loaded even if the page missed the `result` event.
+
+### Security
+
+- The workbench binds to `127.0.0.1` by default and **refuses a non-loopback
+  bind** unless `--allow-remote` is passed. There is no authentication or TLS,
+  so it must not be treated as a service.
+- Write requests carrying an `Origin` header must be same-origin, preventing a
+  page open in the same browser from driving the local API.
+- Job config is applied through a whitelist: a request cannot set `hf_token` or
+  `registry_path`, filenames are reduced to their basename, and audio is
+  confined to the workbench data directory.
+
+### Known limitations
+
+- The workbench does not yet offer stage replay: changing a threshold submits a
+  whole new job instead of re-running only fusion/identification. The pure
+  stage interfaces needed for that already exist.
+- DER/WER evaluation and threshold sweeps are not in this change. The job
+  results are groundwork for a future `eval` page.
+- Cancellation is cooperative and only checked between chunks.
+- No authentication, multi-user isolation or consent expiry — same
+  local-trusted-machine posture as the registry.
 
 ---
 
