@@ -173,8 +173,10 @@ First public release: sentence-level speaker-diarized transcription.
 
 ## Release links
 
-No tags exist yet, so the compare links below will resolve only once the
-corresponding `vX.Y.Z` tags are pushed. See `docs/versioning.md` §6.
+Only `[Unreleased]` resolves today: `v0.2.0` is the repository's first tag, and
+`0.1.0` / `0.1.1` were shipped before tagging started, so their sections are
+dated records of commits rather than checkouts (see `docs/versioning.md` §3 and
+§6).
 
 [Unreleased]: https://github.com/fukaf/whodunit-asr/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/fukaf/whodunit-asr/compare/v0.1.1...v0.2.0

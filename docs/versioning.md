@@ -116,25 +116,28 @@ branch ──► change + test ──► CHANGELOG [Unreleased] ──► PR ─
 4. **Merge as a squash** (this repo's convention) so `main` gains one commit per
    feature. The `PR #` number lands in the commit subject and is how the entry
    is traced back to the discussion.
-5. **Release.** When `main` is in a state you are willing to stand behind:
+5. **Release.** When `main` is in a state you are willing to stand behind.
+   **The release commit itself touches nothing but the version and the
+   changelog**: promoting `[Unreleased]` must not carry code changes, otherwise
+   the tag describes a tree nobody reviewed as a release.
 
    ```bash
-   # 1. promote Unreleased
-   #    ## [Unreleased]            ->  ## [Unreleased]\n\nNothing yet.
-   #    ## [0.3.0] - 2026-12-05    (today's date, ISO 8601, no leading zero padding)
-   #  2. keep the compare links at the bottom of CHANGELOG.md in sync
-   #  3. bump the version in both places
-   ```
-
-   ```bash
+   $EDITOR CHANGELOG.md              # rename [Unreleased], date it, leave a fresh one
    $EDITOR sdts/__init__.py          # __version__ = "0.3.0"
-   $EDITOR CHANGELOG.md              # heading, date, compare links
    python -m pytest -q               # 48 passed, including test_version.py
-   git add CHANGELOG.md pyproject.toml sdts/__init__.py
+   git add CHANGELOG.md sdts/__init__.py
    git commit -m "Release 0.3.0"
    git tag -a v0.3.0 -m "0.3.0"
    git push && git push --tags
    git archive --format=zip -o /tmp/sdts-0.3.0.zip v0.3.0   # the shipped snapshot
+   ```
+
+   Then publish a GitHub Release from the tag, pasting that version's
+   `CHANGELOG.md` section as the body — not `--generate-notes`, which produces a
+   commit list that says nothing about behaviour:
+
+   ```bash
+   gh release create v0.3.0 --title "0.3.0" --notes-file /tmp/notes-0.3.0.md
    ```
 
 6. **After the release**, open the next `[Unreleased]` section if step 1 closed
@@ -145,19 +148,41 @@ Small repositories may skip formal releases for a while. That is fine: the
 everything at once. What is **not** fine is a release tag whose changelog
 section does not match what was actually on `main` at that commit.
 
-### What 0.1.0, 0.1.1 and 0.2.0 did *not* do
+### The rule, stated once
 
-All three were released from `main` **without a git tag** — the repository has
-no tags at all, and the three sections in `CHANGELOG.md` are dated, attributed
-sections rather than tag checkouts. That is the accumulated-`[Unreleased]` case
-above, resolved retroactively: the dates come from the commits on `main`, not
-from tags.
+> **A tag is valid when `git show vX.Y.Z:sdts/__init__.py` reports `X.Y.Z`.**
 
-The consequence is that `0.1.0` and `0.1.1` cannot be checked out again, and
-`0.2.0` will only be taggable if it is done right now, at this commit. Do that
-if you want the first clean tag, and note in the next release that the earlier
-sections predate tagging. Do **not** retro-tag a later commit as `v0.2.0` — a
-tag that points at a tree it does not describe is worse than a missing tag.
+That is the whole test. It is checkable, it needs no trust, and
+`tests/test_version.py` enforces its equivalent for the current tree. Corollaries:
+
+- The tag goes on a `Release X.Y.Z` commit, not on the feature commit that
+  happens to be HEAD when you decide to release. A feature commit still carries
+  the *previous* version string, so tagging it makes the wheel lie.
+- Two versions cannot share a commit. If `A` and `B` were released one after the
+  other without a commit in between, one of them has no reproducible tree, and
+  the honest thing is to say so in the changelog rather than invent a tag.
+- Moving a published tag (`git tag -f`, force-push) is forbidden. A wrong release
+  is superseded by the next patch version.
+
+### History: how 0.1.0-0.2.0 were tagged in hindsight
+
+Neither `0.1.0` nor `0.1.1` was ever tagged, and both point at the same source
+tree. Re-tagging them after the fact would have meant two tags on one commit
+(`v0.1.0` and `v0.1.1` on `41d3f5c`), which is exactly the "the wheel cannot
+tell which version it is" failure the rule above exists to prevent. So they stay
+untagged, and `CHANGELOG.md` records them as *dated sections derived from the
+commits*, not as checkouts.
+
+`v0.2.0` got a real tag, on the commit that actually declares `0.2.0`:
+
+| Tag | Commit | Why there |
+|---|---|---|
+| `v0.2.0` | `dca0d00` — "Add CHANGELOG and a version management policy (#2)" | the first commit whose tree declares `__version__ = "0.2.0"`, and the first tag, so the release notes genuinely say what changed |
+
+The 0.2.0 feature itself landed in `0a3a36b` and still reports `0.1.0` — that
+commit is reachable from the tag but is not a release. This is a one-off
+correction of a repository that shipped without tags; from here on the normal
+rule applies and every release gets its own commit.
 
 ---
 
@@ -211,9 +236,9 @@ Merge policy:
 ## 6. Bottom of `CHANGELOG.md`
 
 Keep the compare links current so old versions are one click apart on GitHub.
-Until the first tag exists, the links are written but **do not resolve**: they
-are the shape to fill in, and the `v0.1.0` line only starts working once such a
-tag is pushed.
+For versions without a tag the link target does not exist and GitHub shows an
+empty comparison; that is the honest rendering of "this version was never a
+checkout", and the footnote beside the links says so.
 
 ```markdown
 [Unreleased]: https://github.com/fukaf/whodunit-asr/compare/v0.2.0...HEAD
@@ -224,7 +249,8 @@ tag is pushed.
 
 Link rules: `[Unreleased]` compares the newest tag to `HEAD`; every released
 version compares the previous tag to its own; the earliest uses the release page
-URL until it too becomes a comparison.
+URL until it too becomes a comparison. Only the newest version's link is
+expected to resolve today (`v0.1.0` / `v0.1.1` are untagged by design, §3).
 
 ---
 
@@ -246,6 +272,10 @@ URL until it too becomes a comparison.
 - [ ] `pytest -q` green on the release commit — `tests/test_version.py` fails
       if the heading is missing.
 - [ ] Compare links at the bottom updated.
+- [ ] The release commit contains **only** `CHANGELOG.md` and
+      `sdts/__init__.py`.
 - [ ] `git tag -a vX.Y.Z` pushed, plus an archive of the tree.
-- [ ] The tag points at the commit whose tree the section describes. If it does
-      not, do not tag — see §3, "What 0.1.0, 0.1.1 and 0.2.0 did *not* do".
+- [ ] `git show vX.Y.Z:sdts/__init__.py` reports `X.Y.Z` (§3). If it does not,
+      fix the tag target, do not force-move the tag.
+- [ ] GitHub Release created from the tag with the changelog section as its
+      body.
