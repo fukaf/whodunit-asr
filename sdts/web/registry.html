@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice gallery</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-title="registry.title">
+<header class="top">
+  <span class="brand" data-i18n="app.name"></span>
+  <nav class="main">
+    <a href="index.html" data-i18n="nav.new"></a>
+    <a href="registry.html" class="active" data-i18n="nav.registry"></a>
+    <a href="settings.html" data-i18n="nav.settings"></a>
+    <a href="/api/docs" target="_blank" rel="noopener" data-i18n="nav.docs"></a>
+  </nav>
+  <div class="spacer"></div>
+  <div data-lang-switch></div>
+</header>
+
+<main>
+  <div id="flash"></div>
+
+  <h1 data-i18n="registry.title"></h1>
+  <p class="sub" data-i18n="registry.subtitle"></p>
+
+  <section class="card">
+    <div class="row between">
+      <h3 style="margin:0" data-i18n="registry.enroll"></h3>
+      <span class="faint mono" id="db-path"></span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:10px;align-items:end;margin-top:12px">
+      <label class="field" style="margin:0">
+        <span data-i18n="registry.enroll.name"></span>
+        <input type="text" id="enroll-name">
+      </label>
+      <label class="field" style="margin:0">
+        <span data-i18n="registry.enroll.audio"></span>
+        <input type="text" id="enroll-audio" class="mono">
+      </label>
+      <button class="primary" id="enroll-submit" data-i18n="registry.enroll.submit"></button>
+    </div>
+    <p class="faint" data-i18n="registry.enroll.hint"></p>
+  </section>
+
+  <section>
+    <div class="row between">
+      <h2 data-i18n="registry.title"></h2>
+      <button class="ghost" id="refresh" data-i18n="common.refresh"></button>
+    </div>
+    <div class="card" style="padding:0">
+      <table>
+        <thead>
+          <tr>
+            <th data-i18n="registry.columns.name"></th>
+            <th data-i18n="registry.columns.samples"></th>
+            <th data-i18n="registry.columns.consent"></th>
+            <th data-i18n="registry.columns.created"></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="registry-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { initI18n, t } from "./i18n.js";
+import { api, el, clear, banner, errorText } from "./common.js";
+
+initI18n();
+
+const flash = document.getElementById("flash");
+
+async function load() {
+  const body = document.getElementById("registry-body");
+  let data;
+  try {
+    data = await api("/api/registry");
+  } catch (err) {
+    clear(body).appendChild(el("tr", {}, [
+      el("td", { colspan: "5" }, [el("div", { class: "banner error", text: errorText(err, t) })])]));
+    return;
+  }
+  document.getElementById("db-path").textContent = data.path || "";
+  clear(body);
+  if (!data.speakers.length) {
+    body.appendChild(el("tr", {}, [
+      el("td", { colspan: "5" }, [el("div", { class: "empty", text: t("registry.empty") })])]));
+    return;
+  }
+  for (const spk of data.speakers) body.appendChild(row(spk));
+}
+
+function row(spk) {
+  const active = spk.centroids.filter((c) => c.status === "active").length;
+  const pending = spk.centroids.filter((c) => c.status === "pending").length;
+  const name = el("input", { type: "text", value: spk.display_name });
+  name.addEventListener("change", async () => {
+    try {
+      await api(`/api/registry/${spk.id}/rename`, { method: "POST", body: { name: name.value } });
+    } catch (err) {
+      banner(flash, errorText(err, t));
+    }
+  });
+
+  const revoke = el("button", {
+    class: "ghost",
+    text: t("registry.revoke"),
+    onclick: async () => {
+      if (!confirm(t("registry.revoke.confirm"))) return;
+      try { await api(`/api/registry/${spk.id}/revoke`, { method: "POST" }); load(); }
+      catch (err) { banner(flash, errorText(err, t)); }
+    },
+  });
+  revoke.disabled = Boolean(spk.revoked_at);
+  const remove = el("button", {
+    class: "ghost danger",
+    text: t("registry.delete"),
+    onclick: async () => {
+      if (!confirm(t("registry.delete.confirm"))) return;
+      try { await api(`/api/registry/${spk.id}?confirm=true`, { method: "DELETE" }); load(); }
+      catch (err) { banner(flash, errorText(err, t)); }
+    },
+  });
+
+  const badges = [el("span", { class: "mono", text: String(active) })];
+  if (pending) {
+    badges.push(el("span", {
+      class: "status status-queued", style: "margin-left:6px",
+      text: `${t("registry.pending")} ${pending}`,
+    }));
+  }
+  if (spk.revoked_at) {
+    badges.push(el("span", {
+      class: "status status-cancelled", style: "margin-left:6px",
+      text: t("registry.revoked"),
+    }));
+  }
+
+  return el("tr", {}, [
+    el("td", { style: "min-width:180px" }, [name]),
+    el("td", {}, badges),
+    el("td", { class: "faint", text: spk.consent_scope || t("common.none") }),
+    el("td", { class: "faint", text: (spk.created_at || "").replace("T", " ").slice(0, 16) }),
+    el("td", {}, [el("div", { class: "row" }, [revoke, remove])]),
+  ]);
+}
+
+document.getElementById("enroll-submit").addEventListener("click", async () => {
+  const name = document.getElementById("enroll-name").value.trim();
+  const audio = document.getElementById("enroll-audio").value.trim();
+  const btn = document.getElementById("enroll-submit");
+  btn.disabled = true;
+  try {
+    const out = await api("/api/registry", { method: "POST", body: { name, audio } });
+    banner(flash, t("registry.enroll.done", { name: out.speaker.display_name }), "ok");
+    document.getElementById("enroll-name").value = "";
+    document.getElementById("enroll-audio").value = "";
+    load();
+  } catch (err) {
+    banner(flash, errorText(err, t));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("refresh").addEventListener("click", load);
+document.addEventListener("sdts:langchange", load);
+load();
+</script>
+</body>
+</html>

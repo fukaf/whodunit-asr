@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diarization Workbench</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-title="index.title">
+<header class="top">
+  <span class="brand" data-i18n="app.name"></span>
+  <span class="tagline" data-i18n="app.tagline"></span>
+  <nav class="main">
+    <a href="index.html" class="active" data-i18n="nav.new"></a>
+    <a href="registry.html" data-i18n="nav.registry"></a>
+    <a href="settings.html" data-i18n="nav.settings"></a>
+    <a href="/api/docs" target="_blank" rel="noopener" data-i18n="nav.docs"></a>
+  </nav>
+  <div data-lang-switch></div>
+</header>
+
+<main>
+  <div id="flash"></div>
+
+  <section class="card">
+    <h1 data-i18n="index.title"></h1>
+    <p class="sub" data-i18n="index.subtitle"></p>
+
+    <div class="tabs" role="tablist">
+      <button type="button" id="tab-upload" class="active" role="tab" data-i18n="index.source.upload"></button>
+      <button type="button" id="tab-path" role="tab" data-i18n="index.source.path"></button>
+    </div>
+
+    <!-- Upload -->
+    <div id="pane-upload">
+      <div class="dropzone" id="dropzone" role="button" tabindex="0">
+        <div id="drop-label" data-i18n="index.drop"></div>
+        <div class="faint mono" id="drop-file" style="margin-top:6px"></div>
+      </div>
+      <input type="file" id="file-input" hidden accept=".wav,.mp3,.m4a,.aac,.flac,.ogg,.oga,.opus,.wma,.mp4,.m4v,.mov,.mkv,.webm,.avi,.ts">
+    </div>
+
+    <!-- Path -->
+    <div id="pane-path" hidden>
+      <label class="field">
+        <span data-i18n="index.path.placeholder"></span>
+        <input type="text" id="source-path" class="mono" data-i18n-placeholder="index.path.placeholder">
+      </label>
+    </div>
+
+    <p class="faint" data-i18n="index.source.hint"></p>
+
+    <details id="config-box" style="margin-top:8px">
+      <summary class="muted" style="cursor:pointer;font-size:13px" data-i18n="index.config"></summary>
+      <div style="margin-top:12px;display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px">
+        <label class="field">
+          <span data-i18n="index.asr.language"></span>
+          <select id="opt-language">
+            <option value="" data-i18n="index.asr.language.auto"></option>
+            <option value="ja">日本語 (ja)</option>
+            <option value="en">English (en)</option>
+            <option value="zh">中文 (zh)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span data-i18n="index.asr.model"></span>
+          <input type="text" id="opt-model" class="mono" value="large-v3-turbo">
+        </label>
+        <label class="field">
+          <span data-i18n="index.diar.num"></span>
+          <input type="number" id="opt-num-speakers" min="1" max="20" placeholder="—">
+        </label>
+        <label class="field inline" style="align-self:end">
+          <input type="checkbox" id="opt-ident">
+          <span data-i18n="index.ident.enabled"></span>
+        </label>
+      </div>
+      <p class="faint" data-i18n="index.diar.num.hint"></p>
+      <p class="faint" data-i18n="index.ident.hint"></p>
+    </details>
+
+    <div class="row" style="margin-top:16px">
+      <button class="primary" id="submit" data-i18n="index.submit"></button>
+      <span class="faint" data-i18n="index.queue.note"></span>
+    </div>
+  </section>
+
+  <section>
+    <div class="row between">
+      <h2 data-i18n="index.jobs.title"></h2>
+      <button class="ghost" id="refresh" data-i18n="common.refresh"></button>
+    </div>
+    <div class="card" style="padding:0">
+      <table>
+        <thead>
+          <tr>
+            <th data-i18n="index.jobs.columns.file"></th>
+            <th data-i18n="index.jobs.columns.status"></th>
+            <th data-i18n="index.jobs.columns.progress"></th>
+            <th data-i18n="index.jobs.columns.speakers"></th>
+            <th data-i18n="index.jobs.columns.created"></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="jobs-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { initI18n, t } from "./i18n.js";
+import { api, el, clear, banner, errorText, fmtClock, shortenPath, statusClass, debounce } from "./common.js";
+
+initI18n();
+
+const state = { mode: "upload", file: null };
+
+/* -- tabs -------------------------------------------------------------- */
+const panes = { upload: document.getElementById("pane-upload"), path: document.getElementById("pane-path") };
+for (const mode of ["upload", "path"]) {
+  document.getElementById(`tab-${mode}`).addEventListener("click", () => {
+    state.mode = mode;
+    for (const key of Object.keys(panes)) panes[key].hidden = key !== mode;
+    document.querySelectorAll(".tabs button").forEach((b) =>
+      b.classList.toggle("active", b.id === `tab-${mode}`));
+  });
+}
+
+/* -- upload / drag and drop -------------------------------------------- */
+const dropzone = document.getElementById("dropzone");
+const fileInput = document.getElementById("file-input");
+const dropFile = document.getElementById("drop-file");
+
+function pickFile(file) {
+  state.file = file || null;
+  dropFile.textContent = file ? `${file.name} · ${(file.size / 1048576).toFixed(1)} MB` : "";
+}
+
+dropzone.addEventListener("click", () => fileInput.click());
+dropzone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); }
+});
+fileInput.addEventListener("change", () => pickFile(fileInput.files[0]));
+for (const type of ["dragenter", "dragover"]) {
+  dropzone.addEventListener(type, (e) => { e.preventDefault(); dropzone.classList.add("over"); });
+}
+for (const type of ["dragleave", "drop"]) {
+  dropzone.addEventListener(type, (e) => { e.preventDefault(); dropzone.classList.remove("over"); });
+}
+dropzone.addEventListener("drop", (e) => {
+  const file = e.dataTransfer?.files?.[0];
+  if (file) pickFile(file);
+});
+
+/* -- submit ------------------------------------------------------------ */
+function collectConfig() {
+  const config = {};
+  const language = document.getElementById("opt-language").value;
+  const model = document.getElementById("opt-model").value.trim();
+  const num = document.getElementById("opt-num-speakers").value;
+  const ident = document.getElementById("opt-ident").checked;
+  if (language) config.asr = { ...(config.asr || {}), language };
+  if (model) config.asr = { ...(config.asr || {}), model };
+  if (num) config.diarization = { ...(config.diarization || {}), num_speakers: Number(num) };
+  if (ident) config.identification = { ...(config.identification || {}), enabled: true, mode: "review" };
+  return config;
+}
+
+const submit = document.getElementById("submit");
+submit.addEventListener("click", async () => {
+  const flash = document.getElementById("flash");
+  clear(flash);
+  submit.disabled = true;
+  try {
+    let job;
+    if (state.mode === "upload") {
+      if (!state.file) { banner(flash, t("index.drop")); return; }
+      const form = new FormData();
+      form.append("file", state.file);
+      form.append("config", JSON.stringify(collectConfig()));
+      job = (await api("/api/jobs", { method: "POST", form })).job;
+    } else {
+      const source = document.getElementById("source-path").value.trim();
+      if (!source) { banner(flash, t("index.path.placeholder")); return; }
+      job = (await api("/api/jobs", { method: "POST", body: { source, config: collectConfig() } })).job;
+    }
+    location.href = `job.html?id=${encodeURIComponent(job.id)}`;
+  } catch (err) {
+    banner(flash, errorText(err, t));
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+/* -- job list ---------------------------------------------------------- */
+async function loadJobs() {
+  const body = document.getElementById("jobs-body");
+  let jobs = [];
+  try {
+    jobs = (await api("/api/jobs")).jobs;
+  } catch (err) {
+    clear(body).appendChild(el("tr", {}, [el("td", { colspan: "6" }, [el("div", { class: "banner error", text: errorText(err, t) })])]));
+    return;
+  }
+  clear(body);
+  if (!jobs.length) {
+    body.appendChild(el("tr", {}, [el("td", { colspan: "6" }, [el("div", { class: "empty", text: t("index.jobs.empty") })])]));
+    return;
+  }
+  for (const job of jobs) body.appendChild(jobRow(job));
+}
+
+function jobRow(job) {
+  const open = () => { location.href = `job.html?id=${encodeURIComponent(job.id)}`; };
+  const pct = Math.round((job.progress || 0) * 100);
+  const bar = el("div", { class: `bar ${job.status === "done" ? "done" : ""} ${job.status === "failed" ? "failed" : ""}` }, [
+    el("i", { style: `width:${pct}%` }),
+  ]);
+  const speakers = job.meta?.speakers?.length ?? "—";
+  const remove = el("button", {
+    class: "ghost", title: t("index.jobs.delete"),
+    onclick: async (e) => {
+      e.stopPropagation();
+      if (!confirm(t("index.jobs.delete.confirm"))) return;
+      try {
+        await api(`/api/jobs/${job.id}`, { method: "DELETE" });
+        loadJobs();
+      } catch (err) {
+        banner(document.getElementById("flash"), errorText(err, t));
+      }
+    },
+  }, "✕");
+  return el("tr", { class: "clickable", onclick: open }, [
+    el("td", {}, [
+      el("div", { text: job.source_name }),
+      el("div", { class: "faint mono", text: job.stem || "" }),
+    ]),
+    el("td", {}, [el("span", { class: statusClass(job.status), text: t(`index.jobs.${job.status}`) })]),
+    el("td", {}, [bar]),
+    el("td", { class: "mono", text: String(speakers) }),
+    el("td", { class: "faint", text: (job.created_at || "").replace("T", " ").slice(0, 16) }),
+    el("td", {}, [remove]),
+  ]);
+}
+
+document.getElementById("refresh").addEventListener("click", loadJobs);
+document.addEventListener("sdts:langchange", loadJobs);
+loadJobs();
+setInterval(loadJobs, 4000);
+</script>
+</body>
+</html>

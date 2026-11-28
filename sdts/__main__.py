@@ -151,6 +151,18 @@ def build_subcommand_parser() -> argparse.ArgumentParser:
     p.add_argument("--pairs", required=True)
     p.add_argument("--out", default="identification.yaml")
     p.add_argument("--config")
+
+    p = sub.add_parser("serve", help="start the local review workbench (needs sdts[web])")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="bind address; use 0.0.0.0 only with --allow-remote")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--data-dir", default="~/.sdts/workbench",
+                   help="where job records, uploads and outputs live")
+    p.add_argument("--registry", help="voice registry path (defaults to the config value)")
+    p.add_argument("--config", help="base YAML config the job form starts from")
+    p.add_argument("--allow-remote", action="store_true",
+                   help="permit binding to a non-loopback address; no auth is provided")
+    p.add_argument("--open-browser", action="store_true", help="open the workbench after startup")
     return top
 
 
@@ -186,6 +198,9 @@ def _dispatch_subcommand(argv: list[str]) -> int:
         for p in paths:
             print(f"-> {p}")
         return 0
+
+    if args.cmd == "serve":
+        return _serve(args)
 
     if args.cmd == "registry":
         cfg = PipelineConfig()
@@ -243,9 +258,44 @@ def _dispatch_subcommand(argv: list[str]) -> int:
                       config=PipelineConfig.load(args.config) if args.config else None)
 
 
+def _serve(args: argparse.Namespace) -> int:
+    """Start the local workbench. FastAPI is optional, so import it here."""
+    try:
+        import uvicorn
+    except ImportError:
+        print("sdts serve needs the optional web dependencies:\n"
+              "  pip install sdts[web]", file=sys.stderr)
+        return 2
+    from .server.app import WEB_DIR, create_app
+
+    if not WEB_DIR.is_dir():
+        print(f"workbench assets are missing from {WEB_DIR}; "
+              "reinstall sdts or check the package contents", file=sys.stderr)
+        return 2
+    loopback = {"127.0.0.1", "localhost", "::1"}
+    if args.host not in loopback and not args.allow_remote:
+        print(f"refusing to bind {args.host}: the workbench has no authentication "
+              "and is meant for localhost only. Pass --allow-remote if you "
+              "accept that risk.", file=sys.stderr)
+        return 2
+
+    app = create_app(data_dir=args.data_dir, registry_path=args.registry,
+                     base_config_path=args.config)
+    url = f"http://{args.host}:{args.port}/"
+    print(f"workbench: {url}")
+    print(f"data dir : {Path(args.data_dir).expanduser().resolve()}")
+    print("press Ctrl+C to stop")
+    if args.open_browser:
+        import threading
+        import webbrowser
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(argv if argv is not None else sys.argv[1:])
-    if argv and argv[0] in {"labels", "registry", "enroll", "calibrate"}:
+    if argv and argv[0] in {"labels", "registry", "enroll", "calibrate", "serve"}:
         return _dispatch_subcommand(argv)
     args = build_parser().parse_args(argv)
     logging.basicConfig(

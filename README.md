@@ -1,6 +1,6 @@
 # Speaker Diarized Transcription System (SDTS)
 
-> Language: **English** | [日本語](README.ja.md) · Version: **0.2.0** · [Changelog](CHANGELOG.md) · [Release process](docs/versioning.md)
+> Language: **English** | [日本語](README.ja.md) · Version: **0.2.0** · [Changelog](CHANGELOG.md) · [Release process](docs/versioning.md) · [Web workbench](docs/web-ui.md)
 
 Audio in, speaker-attributed transcript out:
 
@@ -528,6 +528,31 @@ _ENGINES["my-engine"] = MyEngine
 ```
 
 Nothing downstream changes as long as you return `Segment` with `Word` lists.
+
+---
+
+## 13. Local web workbench (optional)
+
+A browser UI for the two workflows that are awkward from a terminal: watching
+a long job, and clicking through the transcript to name speakers. The web stack
+is an **optional dependency**, and the CLI is untouched.
+
+```bash
+pip install "sdts[web]"
+python -m sdts serve --open-browser       # http://127.0.0.1:8765/
+```
+
+Four pages: new job (upload or local path + a few overrides), live job view
+(stage progress over SSE, speaker cards, in-place rename, WAV clips, exports),
+voice gallery (enrol / rename / revoke / delete) and settings (thresholds and
+YAML editing). The interface is available in **中文 / English / 日本語**; the
+switcher is at the top of every page and remembers your choice.
+
+It binds to `127.0.0.1` by default, refuses a public bind without
+`--allow-remote`, checks the `Origin` of write requests, and never sends voice
+vectors to the browser. Renaming a speaker in a job is session-only; enrolling
+a voice stays an explicit, separate action. Full guide:
+[`docs/web-ui.md`](docs/web-ui.md).
 
 **Map clusters to real names.** The pipeline deliberately stops at
 `SPEAKER_00`. Attaching names is enrolment, not diarization, and it needs a

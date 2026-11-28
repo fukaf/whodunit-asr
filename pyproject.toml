@@ -24,7 +24,14 @@ dependencies = [
 
 [project.optional-dependencies]
 sensevoice = ["funasr>=1.2.0", "modelscope>=1.20.0"]
-dev = ["pytest>=8.0"]
+# `sdts serve`: the local review workbench. Kept optional so the core install
+# stays at the eight heavy ML dependencies and nothing pulls in a web stack.
+web = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.30,<1",
+    "python-multipart>=0.0.9",
+]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "httpx>=0.27"]
 
 [project.scripts]
 sdts = "sdts.__main__:main"
@@ -32,8 +39,15 @@ sdts = "sdts.__main__:main"
 [tool.setuptools.packages.find]
 include = ["sdts*"]
 
+# The workbench is static HTML/CSS/JS served straight from `sdts/web/`.
+# Without this, an installed wheel has the API but a 404 at `/`.
+[tool.setuptools.package-data]
+sdts = ["web/*.html", "web/*.js", "web/*.css"]
+
 [tool.setuptools.dynamic]
 version = { attr = "sdts.__version__" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
