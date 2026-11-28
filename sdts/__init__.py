@@ -14,4 +14,4 @@ __all__ = [
 ]
 # Single source of truth for the version: pyproject.toml reads it dynamically.
 # Bump it together with CHANGELOG.md (see docs/versioning.md).
-__version__ = "0.2.0"
+__version__ = "0.3.0"

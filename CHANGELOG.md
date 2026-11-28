@@ -13,6 +13,12 @@ Change types: **Added** · **Changed** · **Fixed** · **Removed** · **Deprecat
 
 ## [Unreleased]
 
+Nothing yet.
+
+---
+
+## [0.3.0] - 2026-11-28
+
 ### Added
 
 - **Local web workbench** (`python -m sdts serve`): a browser UI over the
@@ -254,12 +260,12 @@ First public release: sentence-level speaker-diarized transcription.
 
 ## Release links
 
-Only `[Unreleased]` resolves today: `v0.2.0` is the repository's first tag, and
-`0.1.0` / `0.1.1` were shipped before tagging started, so their sections are
-dated records of commits rather than checkouts (see `docs/versioning.md` §3 and
-§6).
+`v0.2.0` and `v0.3.0` are real tags and their links resolve. `0.1.0` / `0.1.1`
+were shipped before tagging started, so their sections are dated records of
+commits rather than checkouts (see `docs/versioning.md` §3 and §6).
 
-[Unreleased]: https://github.com/fukaf/whodunit-asr/compare/v0.2.0...HEAD
-[0.2.0]: https://github.com/fukaf/whodunit-asr/compare/v0.1.1...v0.2.0
+[Unreleased]: https://github.com/fukaf/whodunit-asr/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/fukaf/whodunit-asr/releases/tag/v0.3.0
+[0.2.0]: https://github.com/fukaf/whodunit-asr/releases/tag/v0.2.0
 [0.1.1]: https://github.com/fukaf/whodunit-asr/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/fukaf/whodunit-asr/releases/tag/v0.1.0
