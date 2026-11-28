@@ -1,6 +1,6 @@
 # Speaker Diarized Transcription System (SDTS)
 
-> Language: **English** | [日本語](README.ja.md)
+> Language: **English** | [日本語](README.ja.md) · Version: **0.2.0** · [Changelog](CHANGELOG.md) · [Release process](docs/versioning.md)
 
 Audio in, speaker-attributed transcript out:
 

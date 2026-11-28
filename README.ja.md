@@ -1,6 +1,6 @@
 # 話者分離文字起こしシステム（SDTS）
 
-> 言語: [English](README.md) | **日本語**
+> 言語: [English](README.md) | **日本語** ・ バージョン: **0.2.0** ・ [変更履歴](CHANGELOG.md) ・ [リリース手順](docs/versioning.md)
 
 音声を入れると、話者が紐づいた文字起こしが出てきます：
 

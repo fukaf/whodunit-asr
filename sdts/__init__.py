@@ -12,4 +12,6 @@ __all__ = [
     "Word",
     "TranscriptResult",
 ]
-__version__ = "0.1.0"
+# Single source of truth for the version: pyproject.toml reads it dynamically.
+# Bump it together with CHANGELOG.md (see docs/versioning.md).
+__version__ = "0.2.0"
