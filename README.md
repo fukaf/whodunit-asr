@@ -462,7 +462,58 @@ both free and better.
 
 ---
 
-## 11. Extending
+## 11. Speaker identity (optional)
+
+Disabled by default. When enabled, `SPEAKER_0i` clusters can be mapped to real
+display names from a local voice registry.
+
+Workflow:
+
+```bash
+# 1. transcribe as usual
+python -m sdts meeting.mp4 --config config.yaml
+
+# 2. generate a labelling template, short clips and a local review page
+python -m sdts labels init out/meeting_ab12cd.json
+#   -> out/meeting_ab12cd.labels.json
+#   -> out/meeting_ab12cd.review.html
+#   -> out/meeting_ab12cd_clips/
+
+# 3. open review.html, listen, fill in names, tick "persist" for voices to remember,
+#    then export the labels JSON
+
+# 4. apply labels, re-render all formats, and persist selected voices
+python -m sdts labels apply out/meeting_ab12cd.json \
+    --labels out/meeting_ab12cd.labels.json
+```
+
+On later files with `identification.enabled: true`, registered voices are
+matched automatically and written to `speaker_display`; unknown clusters stay
+as `SPEAKER_0i`. `mode: review` (default) only records candidates in the JSON
+meta; `mode: auto` writes matches above `accept_threshold`. Two thresholds plus
+a margin keep ambiguous matches out, and everything is logged locally.
+
+```yaml
+identification:
+  enabled: false
+  registry_path: "~/.sdts/registry.db"
+  mode: review
+  accept_threshold: 0.70   # placeholder - calibrate before auto mode
+  reject_threshold: 0.55
+  margin: 0.10
+  adaptation:
+    enabled: false
+    mode: review
+```
+
+Registry maintenance: `python -m sdts registry list|show|rename|delete|
+adapt-queue|adapt-approve`, plus `enroll` and `calibrate` commands. The registry
+is plain SQLite for a single trusted local machine - no encryption, no multi-user
+support. See `docs/speaker-identity-plan.md` for the full design.
+
+---
+
+## 12. Extending
 
 **Add an ASR engine** - subclass the protocol and register it:
 
