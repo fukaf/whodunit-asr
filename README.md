@@ -543,7 +543,8 @@ python -m sdts serve --open-browser       # http://127.0.0.1:8765/
 ```
 
 Four pages: new job (upload or local path + a few overrides), live job view
-(stage progress over SSE, speaker cards, in-place rename, WAV clips, exports),
+(stage progress over SSE, speaker cards with one-click voice-match suggestions,
+in-place rename, WAV clips, exports),
 voice gallery (enrol / rename / revoke / delete) and settings (thresholds and
 YAML editing). The interface is available in **中文 / English / 日本語**; the
 switcher is at the top of every page and remembers your choice.

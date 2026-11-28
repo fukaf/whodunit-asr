@@ -39,9 +39,11 @@ class FakePipeline:
 
     fail_with: str | None = None
     hold: float = 0.0
+    last_config: PipelineConfig | None = None
 
     def __init__(self, cfg: PipelineConfig):
         self.cfg = cfg
+        FakePipeline.last_config = cfg
 
     def run(self, path, num_speakers=None, *, on_stage=None):
         stages = [("probe", 0, 1), ("chunk", 0, 2), ("chunk", 1, 2),
@@ -71,6 +73,7 @@ class FakePipeline:
 def app(tmp_path, monkeypatch):
     FakePipeline.fail_with = None
     FakePipeline.hold = 0.0
+    FakePipeline.last_config = None
     monkeypatch.setattr("sdts.server.jobs.Pipeline", FakePipeline)
     application = create_app(
         data_dir=tmp_path / "wb",
@@ -333,6 +336,47 @@ async def test_rename_writes_json_and_text_exports(client, sample):
 
     txt = (await client.get(f"/api/jobs/{job['id']}/export?fmt=txt")).text
     assert "Okada: hello there" in txt
+
+
+async def test_summary_exposes_identification_suggestion(client, sample, app):
+    """`review` mode computes a best candidate but must not apply it. The page
+    needs the candidate name to offer a one-click 'Apply' button. This test
+    also covers the backwards path for jobs produced by the old UI."""
+    job = await _finished_job(client, sample)
+    path = Path(app.state.jobs.get(job["id"]).result_path)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["meta"]["identification"] = {
+        "mode": "review",
+        "matches": [{"speaker": "SPEAKER_00", "decision": "accept",
+                     "best": "高市早苗", "score": 0.8272, "candidates": []}],
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    summary = (await client.get(f"/api/jobs/{job['id']}/summary")).json()
+    spk0 = next(s for s in summary["speakers"] if s["id"] == "SPEAKER_00")
+    assert spk0["decision"] == "accept"
+    assert spk0["best"] == "高市早苗"
+    assert spk0["display_name"] is None       # review mode: no silent rename
+
+    applied = await client.post(f"/api/jobs/{job['id']}/rename",
+                                json={"speaker": "SPEAKER_00", "name": spk0["best"]})
+    assert applied.status_code == 200
+    result = (await client.get(f"/api/jobs/{job['id']}/result")).json()
+    named = [u for u in result["utterances"] if u["speaker"] == "SPEAKER_00"]
+    assert all(u["speaker_display"] == "高市早苗" for u in named)
+
+
+async def test_identification_mode_reaches_the_pipeline(client, sample):
+    """The new-job form offers 'auto' explicitly; a checked box must send the
+    mode the user picked, not silently fall back to review."""
+    job = (await client.post("/api/jobs", json={
+        "source": str(sample),
+        "config": {"identification": {"enabled": True, "mode": "auto"}},
+    })).json()["job"]
+    await wait_done(client, job["id"])
+    assert FakePipeline.last_config is not None
+    assert FakePipeline.last_config.identification.enabled is True
+    assert FakePipeline.last_config.identification.mode == "auto"
 
 
 async def test_rename_rejects_unknown_speaker(client, sample):

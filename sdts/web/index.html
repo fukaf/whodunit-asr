@@ -74,6 +74,13 @@
           <input type="checkbox" id="opt-ident">
           <span data-i18n="index.ident.enabled"></span>
         </label>
+        <label class="field" id="ident-mode-field">
+          <span data-i18n="index.ident.mode"></span>
+          <select id="opt-ident-mode">
+            <option value="auto" data-i18n="index.ident.mode.auto"></option>
+            <option value="review" data-i18n="index.ident.mode.review"></option>
+          </select>
+        </label>
       </div>
       <p class="faint" data-i18n="index.diar.num.hint"></p>
       <p class="faint" data-i18n="index.ident.hint"></p>
@@ -115,6 +122,17 @@ import { api, el, clear, banner, errorText, fmtClock, shortenPath, statusClass, 
 initI18n();
 
 const state = { mode: "upload", file: null };
+
+/* -- identification mode ----------------------------------------------- */
+const identCheck = document.getElementById("opt-ident");
+const identMode = document.getElementById("opt-ident-mode");
+const identModeField = document.getElementById("ident-mode-field");
+function syncIdentMode() {
+  identMode.disabled = !identCheck.checked;
+  identModeField.style.opacity = identCheck.checked ? "1" : "0.45";
+}
+identCheck.addEventListener("change", syncIdentMode);
+syncIdentMode();
 
 /* -- tabs -------------------------------------------------------------- */
 const panes = { upload: document.getElementById("pane-upload"), path: document.getElementById("pane-path") };
@@ -163,7 +181,13 @@ function collectConfig() {
   if (language) config.asr = { ...(config.asr || {}), language };
   if (model) config.asr = { ...(config.asr || {}), model };
   if (num) config.diarization = { ...(config.diarization || {}), num_speakers: Number(num) };
-  if (ident) config.identification = { ...(config.identification || {}), enabled: true, mode: "review" };
+  if (ident) {
+    config.identification = {
+      ...(config.identification || {}),
+      enabled: true,
+      mode: identMode.value,
+    };
+  }
   return config;
 }
 

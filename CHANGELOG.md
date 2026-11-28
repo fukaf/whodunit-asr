@@ -60,6 +60,13 @@ Change types: **Added** · **Changed** · **Fixed** · **Removed** · **Deprecat
 
 ### Fixed
 
+- Voice matching in the new-job form silently used `mode: review`, so accepted
+  matches were displayed as suggestions but never applied to the transcript.
+  The form now asks for the mode explicitly (`review` = suggest only, `auto` =
+  apply names), defaults to `auto` when the box is ticked, and the job page
+  shows an **Apply** button with the candidate name for accepted matches —
+  including jobs produced by the old UI. A bare score is no longer shown
+  without the name it belongs to.
 - Opening a job page while the job was still queued or running returned `409`
   from `/api/jobs/{id}/summary`, so the page never subscribed to SSE and stayed
   at `...` until a manual reload. `/summary` now answers for every job state

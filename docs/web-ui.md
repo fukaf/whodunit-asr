@@ -43,8 +43,11 @@ non-web command is unaffected.
 already on this machine. The paths in the form are deliberately limited to ASR
 language/model, chunking, known speaker count and identification mode — these
 are the knobs that change transcription quality most often. Advanced or
-site-specific settings stay in the YAML file. The recent-job table polls every
-4 s; one job runs at a time and the rest wait in the queue.
+site-specific settings stay in the YAML file. When voice matching is enabled,
+choose the mode explicitly: **Suggest only** leaves names untouched, while
+**Apply names automatically** writes accepted matches into `speaker_display`.
+The recent-job table polls every 4 s; one job runs at a time and the rest wait
+in the queue.
 
 **Job (`job.html?id=…`).** Safe to open at any time, including immediately
 after `POST /api/jobs` while the job is still `queued` — `/summary` returns the
@@ -55,10 +58,15 @@ carry `stage`, `done`, `total`
 and a coarse `progress` fraction; chunk numbering comes from the new
 `Pipeline.run(on_stage=…)` hook. When the job finishes the page loads the
 result JSON, lists one card per raw `SPEAKER_0i` cluster (with the
-identification decision and score when identification is on), and lets you type
-a display name. Renaming writes `speaker_display` back to the JSON and
-regenerates the `.txt`/`.srt`/`.md` exports; it is session-only and never writes
-a voiceprint. The ▶ button asks the server for a decoded WAV slice of the
+identification decision, best candidate and score when identification is on),
+and lets you type a display name. A **one-click "Apply"** button appears for
+`accept` decisions that have not been named yet — this is how a `review`-mode
+job (including one produced before this button existed) gets its suggested name
+without re-running transcription. Renaming writes `speaker_display` back to the
+JSON and regenerates the `.txt`/`.srt`/`.md` exports; it is session-only and
+never writes a voiceprint. Treat low scores with suspicion: diarization can
+split one person into several clusters, and a confident-looking name on a
+0.08-score cluster is not evidence. The ▶ button asks the server for a decoded WAV slice of the
 source, so listening to a turn does not seek inside a compressed long file.
 Cancel is cooperative: the cancel flag is checked on stage boundaries, so a
 chunk already running must finish first.
@@ -163,7 +171,7 @@ Interactive docs are at `/api/docs`.
 ## 6. Tests
 
 ```bash
-python -m pytest -q        # 78 tests, no GPU, no model downloads
+python -m pytest -q        # 80 tests, no GPU, no model downloads
 ```
 
 `tests/test_server.py` drives the app in-process with `httpx.ASGITransport`

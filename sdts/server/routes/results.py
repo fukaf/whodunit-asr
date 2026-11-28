@@ -37,6 +37,7 @@ def _speakers_payload(data: dict[str, Any]) -> list[dict[str, Any]]:
             "turns": len(utts),
             "seconds": round(seconds, 1),
             "decision": match.get("decision"),
+            "best": match.get("best"),
             "score": match.get("score"),
             "candidates": match.get("candidates", []),
         })

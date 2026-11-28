@@ -156,12 +156,32 @@ function renderSpeakers() {
     const facts = [`${t("job.speakers.turns", { n: spk.turns })} · ${fmtDuration(spk.seconds, unitSet())}`];
     if (decision) facts.push(decision);
     if (spk.score !== null && spk.score !== undefined) facts.push(t("job.speakers.score", { score: spk.score }));
+
+    // A `review`-mode job still computes `best`; it just does not apply it.
+    // Offer one-click acceptance so a confident match is not lost, and show
+    // the candidate name explicitly - a bare score is meaningless to a human.
+    const suggestion = spk.decision === "accept" && spk.best && !spk.display_name
+      ? el("div", { class: "row", style: "margin-top:6px" }, [
+          el("span", { class: "faint", style: "flex:1",
+                       text: t("job.speakers.suggested", { name: spk.best }) }),
+          el("button", {
+            class: "primary", style: "padding:2px 9px;font-size:12px",
+            text: t("job.speakers.apply"),
+            onclick: () => {
+              nameInput.value = spk.best;
+              rename(spk.id, spk.best);
+            },
+          }),
+        ])
+      : null;
+
     host.appendChild(el("div", { class: "speaker-card" }, [
       el("div", { class: "head" }, [
         el("span", { class: "dot", style: `background:${colour}` }),
         el("span", { class: "id", text: spk.id }),
       ]),
       el("div", { style: "margin-top:6px" }, [nameInput]),
+      suggestion,
       el("div", { class: "facts", text: facts.join(" · ") }),
     ]));
   }
