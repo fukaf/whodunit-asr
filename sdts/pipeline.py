@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 
 from . import audio as audio_mod
+from .artifacts import save_artifacts
 from .align import Aligner
 from .asr import build_engine
 from .config import PipelineConfig
@@ -112,7 +113,8 @@ class Pipeline:
 
     # -- main entry --------------------------------------------------------
     def run(self, path: str | Path, num_speakers: int | None = None, *,
-            on_stage: ProgressHook | None = None) -> TranscriptResult:
+            on_stage: ProgressHook | None = None,
+            artifacts_dir: str | Path | None = None) -> TranscriptResult:
         """Transcribe one file end to end.
 
         `on_stage(name, done, total)` fires at every point where a long job can
@@ -120,6 +122,10 @@ class Pipeline:
         the two counters, so the callback can be a log line, a progress bar or
         an HTTP event publish without this module knowing about any of them.
         Leaving it as `None` costs one branch per stage and changes nothing.
+
+        `artifacts_dir`, when given, writes the intermediate products needed
+        for cheap fusion/identification replays. It is opt-in so CLI users do
+        not pay for extra disk writes.
         """
         t0 = time.perf_counter()
         _emit(on_stage, "probe", 0, 1)
@@ -202,13 +208,36 @@ class Pipeline:
             },
         )
         _emit(on_stage, "fuse", 1, 1)
+        collector: dict[str, Any] | None = {"speaker_vectors": {}} if artifacts_dir else None
         if self.cfg.identification.enabled:
             _emit(on_stage, "identify", 0, 1)
             result.meta["identification"] = identify_speakers(
                 result, turns=turns, embedder=self.embedder,
                 cfg=self.cfg.identification, chunk_audio=chunk_audio,
-                chunks=chunks, stride=stride)
+                chunks=chunks, stride=stride, collector=collector)
             _emit(on_stage, "identify", 1, 1)
+
+        if artifacts_dir is not None:
+            vectors = dict(collector["speaker_vectors"]) if collector else {}
+            # Even when identification was off, a later replay may want to try
+            # it. Loading the embedder is best-effort: no HF token or weights
+            # simply means no vectors, never a failed transcription.
+            try:
+                embedder = self.embedder
+            except Exception:  # noqa: BLE001 - replay vectors are optional
+                embedder = None
+            if embedder is not None:
+                for speaker in speakers:
+                    if vectors.get(speaker) is not None:
+                        continue
+                    vec = embedder.embed_turns(
+                        [t for t in turns if t.speaker == speaker],
+                        chunk_audio, chunks, stride)
+                    vectors[speaker] = [float(x) for x in vec] if vec is not None else None
+            save_artifacts(artifacts_dir, segments=local_segments, turns=turns,
+                           speaker_vectors={k: v for k, v in vectors.items() if v},
+                           result=result, chunks=chunks, stride=stride)
+
         _emit(on_stage, "done", 1, 1)
         return result
 

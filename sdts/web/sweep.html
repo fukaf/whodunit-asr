@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Parameter sweep</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-title="sweep.title">
+<header class="top">
+  <span class="brand" data-i18n="app.name"></span>
+  <nav class="main">
+    <a href="index.html" data-i18n="nav.new"></a>
+    <a href="registry.html" data-i18n="nav.registry"></a>
+    <a href="eval.html" data-i18n="nav.eval"></a>
+    <a href="settings.html" data-i18n="nav.settings"></a>
+    <a href="/api/docs" target="_blank" rel="noopener" data-i18n="nav.docs"></a>
+  </nav>
+  <div class="spacer"></div>
+  <div data-lang-switch></div>
+</header>
+
+<main>
+  <div id="flash"></div>
+  <h1 data-i18n="sweep.title"></h1>
+  <p class="sub" data-i18n="sweep.subtitle"></p>
+
+  <section class="card">
+    <div class="row between">
+      <h3 id="job-title" style="margin:0">…</h3>
+      <button id="add" data-i18n="sweep.add"></button>
+    </div>
+    <div id="runs" style="margin-top:12px"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="primary" id="run" data-i18n="sweep.run"></button>
+      <span class="faint" id="run-note"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2 data-i18n="sweep.result"></h2>
+    <div class="card" style="padding:0">
+      <table>
+        <thead><tr>
+          <th data-i18n="sweep.columns.name"></th>
+          <th data-i18n="sweep.columns.speakers"></th>
+          <th data-i18n="sweep.columns.utterances"></th>
+          <th data-i18n="sweep.columns.decisions"></th>
+          <th data-i18n="sweep.columns.open"></th>
+        </tr></thead>
+        <tbody id="results-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { initI18n, t } from "./i18n.js";
+import { api, el, clear, banner, errorText } from "./common.js";
+
+initI18n();
+
+const jobId = new URLSearchParams(location.search).get("id");
+const flash = document.getElementById("flash");
+const state = { runs: [], defaults: null, job: null };
+
+if (!jobId) location.replace("index.html");
+
+function newRun(name = "") {
+  const ident = state.defaults?.identification || {};
+  return {
+    name: name || `run-${state.runs.length + 1}`,
+    accept_threshold: ident.accept_threshold ?? 0.70,
+    reject_threshold: ident.reject_threshold ?? 0.55,
+    margin: ident.margin ?? 0.10,
+    mode: "auto",
+  };
+}
+
+function renderRuns() {
+  const host = clear(document.getElementById("runs"));
+  state.runs.forEach((cfg, i) => {
+    const card = el("div", { class: "speaker-card" });
+    const name = el("input", { type: "text", value: cfg.name });
+    name.addEventListener("input", () => { cfg.name = name.value; });
+    const accept = el("input", { type: "number", step: "0.01", min: "0", max: "2",
+                                 value: String(cfg.accept_threshold) });
+    accept.addEventListener("input", () => { cfg.accept_threshold = Number(accept.value); });
+    const reject = el("input", { type: "number", step: "0.01", min: "0", max: "2",
+                                 value: String(cfg.reject_threshold) });
+    reject.addEventListener("input", () => { cfg.reject_threshold = Number(reject.value); });
+    const margin = el("input", { type: "number", step: "0.01", min: "0", max: "1",
+                                 value: String(cfg.margin) });
+    margin.addEventListener("input", () => { cfg.margin = Number(margin.value); });
+    const mode = el("select", {}, [
+      el("option", { value: "auto", selected: cfg.mode === "auto",
+                     text: t("index.ident.mode.auto") }),
+      el("option", { value: "review", selected: cfg.mode === "review",
+                     text: t("index.ident.mode.review") }),
+    ]);
+    mode.addEventListener("change", () => { cfg.mode = mode.value; });
+    const remove = el("button", { class: "ghost", text: "✕",
+      onclick: () => { state.runs.splice(i, 1); renderRuns(); } });
+
+    const grid = el("div", {
+      style: "display:grid;grid-template-columns:1.4fr repeat(3,1fr) 1fr auto;gap:8px;align-items:end;margin-top:8px",
+    }, [
+      el("label", { class: "field", style: "margin:0" }, [
+        el("span", { text: t("sweep.name") }), name]),
+      el("label", { class: "field", style: "margin:0" }, [
+        el("span", { text: t("sweep.accept") }), accept]),
+      el("label", { class: "field", style: "margin:0" }, [
+        el("span", { text: t("sweep.reject") }), reject]),
+      el("label", { class: "field", style: "margin:0" }, [
+        el("span", { text: t("sweep.margin") }), margin]),
+      el("label", { class: "field", style: "margin:0" }, [
+        el("span", { text: t("sweep.mode") }), mode]),
+      remove,
+    ]);
+    card.appendChild(grid);
+    host.appendChild(card);
+  });
+}
+
+function payload() {
+  return state.runs.map((r) => ({
+    name: r.name,
+    config: { identification: {
+      enabled: true, mode: r.mode,
+      accept_threshold: r.accept_threshold,
+      reject_threshold: r.reject_threshold,
+      margin: r.margin,
+    } },
+  }));
+}
+
+function renderResults(runs) {
+  const body = clear(document.getElementById("results-body"));
+  if (!runs.length) {
+    body.appendChild(el("tr", {}, [el("td", { colspan: "5" }, [
+      el("div", { class: "empty", text: t("sweep.empty") })] )]));
+    return;
+  }
+  for (const run of runs) {
+    const decisions = run.decisions || [];
+    const accepted = decisions.filter((d) => d.decision === "accept");
+    const summary = accepted.length
+      ? accepted.map((d) => `${d.speaker}→${d.best}`).join(", ")
+      : "—";
+    body.appendChild(el("tr", {}, [
+      el("td", {}, [el("div", { text: run.name }),
+                    el("div", { class: "faint mono", text: run.id })]),
+      el("td", { class: "mono", text: String(run.speakers?.length || 0) }),
+      el("td", { class: "mono", text: String(run.utterances ?? 0) }),
+      el("td", { class: "faint", text: summary }),
+      el("td", {}, [el("a", {
+        class: "chip",
+        href: `eval.html?id=${encodeURIComponent(jobId)}&run=${encodeURIComponent(run.id)}`,
+        text: t("sweep.columns.open"),
+      })]),
+    ]));
+  }
+}
+
+document.getElementById("add").addEventListener("click", () => {
+  state.runs.push(newRun());
+  renderRuns();
+});
+
+document.getElementById("run").addEventListener("click", async () => {
+  const btn = document.getElementById("run");
+  btn.disabled = true;
+  clear(flash);
+  try {
+    const out = await api(`/api/jobs/${jobId}/replay`, {
+      method: "POST", body: { runs: payload() } });
+    renderResults(out.runs);
+  } catch (err) {
+    banner(flash, errorText(err, t));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.addEventListener("sdts:langchange", () => {
+  renderRuns();
+  if (state.job) document.getElementById("job-title").textContent = state.job.source_name;
+});
+
+async function load() {
+  try {
+    const [summary, defaults, replays] = await Promise.all([
+      api(`/api/jobs/${jobId}/summary`),
+      api("/api/config/defaults"),
+      api(`/api/jobs/${jobId}/replays`),
+    ]);
+    state.job = summary.job;
+    state.defaults = defaults;
+    document.getElementById("job-title").textContent = summary.job.source_name;
+    if (!state.runs.length) state.runs.push(newRun("baseline"));
+    renderRuns();
+    renderResults(replays.runs);
+  } catch (err) {
+    banner(flash, errorText(err, t));
+  }
+}
+
+load();
+</script>
+</body>
+</html>

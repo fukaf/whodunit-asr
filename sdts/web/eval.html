@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Accuracy evaluation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-title="eval.title">
+<header class="top">
+  <span class="brand" data-i18n="app.name"></span>
+  <nav class="main">
+    <a href="index.html" data-i18n="nav.new"></a>
+    <a href="registry.html" data-i18n="nav.registry"></a>
+    <a href="eval.html" class="active" data-i18n="nav.eval"></a>
+    <a href="settings.html" data-i18n="nav.settings"></a>
+    <a href="/api/docs" target="_blank" rel="noopener" data-i18n="nav.docs"></a>
+  </nav>
+  <div class="spacer"></div>
+  <div data-lang-switch></div>
+</header>
+
+<main>
+  <div id="flash"></div>
+  <h1 data-i18n="eval.title"></h1>
+  <p class="sub" data-i18n="eval.subtitle"></p>
+
+  <section class="card">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <label class="field" style="margin:0">
+        <span data-i18n="eval.job"></span>
+        <input type="text" id="job-id" class="mono">
+      </label>
+      <label class="field" style="margin:0">
+        <span data-i18n="eval.result.source"></span>
+        <select id="source"></select>
+      </label>
+      <label class="field" style="margin:0">
+        <span data-i18n="eval.language"></span>
+        <select id="language">
+          <option value="" data-i18n="eval.language.auto"></option>
+          <option value="ja">日本語 (ja)</option>
+          <option value="en">English (en)</option>
+          <option value="zh">中文 (zh)</option>
+        </select>
+      </label>
+    </div>
+
+    <div style="margin-top:14px">
+      <span class="faint" data-i18n="eval.gold.hint"></span>
+      <div class="row" style="margin-top:6px">
+        <input type="file" id="gold-file" accept=".json,application/json">
+        <a href="/api/eval/gold-template" download="gold-template.json" class="chip"
+           data-i18n="eval.gold.template"></a>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <button class="primary" id="run" data-i18n="eval.run"></button>
+      <span class="faint mono" id="gold-name"></span>
+    </div>
+  </section>
+
+  <section id="report-section" hidden>
+    <h2 data-i18n="eval.result"></h2>
+    <div class="card">
+      <div class="row" style="gap:28px">
+        <div>
+          <div class="faint" data-i18n="eval.metrics.der"></div>
+          <div class="mono" id="m-der" style="font-size:22px">—</div>
+        </div>
+        <div>
+          <div class="faint" data-i18n="eval.metrics.wer"></div>
+          <div class="mono" id="m-wer" style="font-size:22px">—</div>
+        </div>
+        <div>
+          <div class="faint" data-i18n="eval.metrics.unit"></div>
+          <div class="mono" id="m-unit" style="font-size:22px">—</div>
+        </div>
+      </div>
+      <table style="margin-top:14px">
+        <tbody id="metrics-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { initI18n, t } from "./i18n.js";
+import { api, el, clear, banner, errorText } from "./common.js";
+
+initI18n();
+
+const flash = document.getElementById("flash");
+const params = new URLSearchParams(location.search);
+const state = { gold: null, replays: [] };
+
+const jobInput = document.getElementById("job-id");
+jobInput.value = params.get("id") || "";
+const language = document.getElementById("language");
+const source = document.getElementById("source");
+
+function renderSource() {
+  clear(source);
+  source.appendChild(el("option", { value: "", text: t("eval.original") }));
+  for (const run of state.replays) {
+    source.appendChild(el("option", {
+      value: run.result_path || "",
+      text: `${t("eval.replay")}: ${run.name}`,
+    }));
+  }
+  if (params.get("run")) {
+    const run = state.replays.find((r) => r.id === params.get("run"));
+    if (run) source.value = run.result_path || "";
+  }
+}
+
+async function loadJob() {
+  const id = jobInput.value.trim();
+  if (!id) { state.replays = []; renderSource(); return; }
+  try {
+    const data = await api(`/api/jobs/${id}/replays`);
+    state.replays = data.runs || [];
+    renderSource();
+  } catch (err) {
+    banner(flash, errorText(err, t));
+  }
+}
+
+jobInput.addEventListener("change", loadJob);
+
+document.getElementById("gold-file").addEventListener("change", async (e) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  try {
+    state.gold = JSON.parse(await file.text());
+    document.getElementById("gold-name").textContent = file.name;
+  } catch (err) {
+    banner(flash, String(err));
+  }
+});
+
+function pct(value) {
+  return value === null || value === undefined ? "—" : `${(Number(value) * 100).toFixed(2)}%`;
+}
+
+function renderReport(report) {
+  document.getElementById("report-section").hidden = false;
+  document.getElementById("m-der").textContent = pct(report.der);
+  document.getElementById("m-wer").textContent = pct(report.wer);
+  const wc = report.wer_components || {};
+  document.getElementById("m-unit").textContent = wc.unit === "character" ? "CER" : "WER";
+  const body = clear(document.getElementById("metrics-body"));
+  const rows = [
+    [t("eval.metrics.miss"), pct(report.der_components?.["missed detection"])],
+    [t("eval.metrics.false_alarm"), pct(report.der_components?.["false alarm"])],
+    [t("eval.metrics.confusion"), pct(report.der_components?.confusion)],
+    [t("eval.metrics.correct"), pct(report.der_components?.correct)],
+    [t("eval.metrics.total"), report.der_components?.total ?? "—"],
+    ["S / D / I", `${wc.substitutions ?? 0} / ${wc.deletions ?? 0} / ${wc.insertions ?? 0}`],
+    [t("eval.reference_utterances") || "Reference / hypothesis",
+     `${report.reference_utterances} / ${report.hypothesis_utterances}`],
+  ];
+  for (const [key, value] of rows) {
+    body.appendChild(el("tr", {}, [el("td", { class: "faint", text: key }),
+                                   el("td", { class: "mono", text: String(value) })]));
+  }
+}
+
+document.getElementById("run").addEventListener("click", async () => {
+  const btn = document.getElementById("run");
+  btn.disabled = true;
+  clear(flash);
+  try {
+    if (!state.gold) throw new Error(t("eval.gold.hint"));
+    const body = {
+      job_id: jobInput.value.trim(),
+      gold: state.gold,
+      result_path: source.value || undefined,
+      language: language.value || undefined,
+    };
+    renderReport(await api("/api/eval", { method: "POST", body }));
+  } catch (err) {
+    banner(flash, errorText(err, t));
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.addEventListener("sdts:langchange", () => {
+  renderSource();
+  if (state.gold) document.getElementById("gold-name").textContent = t("eval.gold");
+});
+
+loadJob();
+</script>
+</body>
+</html>

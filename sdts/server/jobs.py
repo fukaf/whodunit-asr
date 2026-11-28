@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from ..artifacts import normalise_result_json
 from ..config import PipelineConfig
 from ..pipeline import Pipeline, file_stem
 from ..render import write_all
@@ -286,6 +287,10 @@ class JobManager:
     def _build_config(self, job: Job) -> PipelineConfig:
         path = job.config_path or self.base_config_path
         cfg = PipelineConfig.load(path) if path and Path(path).is_file() else PipelineConfig()
+        # `--registry` on `sdts serve` must reach identification too; otherwise
+        # the UI would manage one gallery while jobs matched against another.
+        if self.registry_path_hint:
+            cfg.identification.registry_path = self.registry_path_hint
         return apply_overrides(cfg, job.config)
 
     def _run(self, job_id: str) -> None:
@@ -309,21 +314,13 @@ class JobManager:
             out_dir = self.data_dir / "out"
             cfg.output.out_dir = str(out_dir)
             pipeline = self._factory(cfg)
-            result = pipeline.run(job.source, on_stage=on_stage)
+            artifacts_dir = self.data_dir / "artifacts" / job.id
+            result = pipeline.run(job.source, on_stage=on_stage,
+                                  artifacts_dir=artifacts_dir)
             stem = file_stem(job.source)
             write_all(result, cfg.output, stem)
             result_json = out_dir / f"{stem}.json"
-            # `Utterance.to_dict()` falls back to the raw label when
-            # `speaker_display` is unset, so a freshly written JSON makes every
-            # unnamed speaker look as if someone had named it "SPEAKER_00".
-            # `labels.apply_labels` patches this too; the workbench has to do
-            # the same, or the rename form starts pre-filled with the raw id.
-            if result_json.is_file():
-                dumped = json.loads(result_json.read_text(encoding="utf-8"))
-                for raw, utt in zip(dumped.get("utterances", []), result.utterances):
-                    raw["speaker_display"] = utt.speaker_display
-                result_json.write_text(json.dumps(dumped, ensure_ascii=False, indent=2),
-                                       encoding="utf-8")
+            normalise_result_json(result_json, result)
             job.result_path = str(result_json)
             job.out_dir = str(out_dir)
             job.stem = stem
