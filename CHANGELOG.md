@@ -13,7 +13,32 @@ Change types: **Added** · **Changed** · **Fixed** · **Removed** · **Deprecat
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **Stage replay + parameter sweeps**: a finished job now saves its global
+  segments, reconciled turns and per-speaker embedding vectors under
+  `<data-dir>/artifacts/<job-id>/` (schema v1, version-checked on read).
+  `POST /api/jobs/{id}/replay` re-runs only fusion → identification → export,
+  so a 60-minute recording can be re-thresholded in seconds. A new sweep page
+  submits up to 24 configurations at once and shows their decisions.
+- **Accuracy evaluation**: a new `/api/eval` endpoint and page compare a
+  human-corrected gold JSON with a job or replay result. DER uses
+  `pyannote.metrics` (with miss / false-alarm / confusion components); WER uses
+  a built-in Levenshtein implementation, character-level for ja/zh. A gold
+  template is downloadable from the page.
+- **Read-only replays**: threshold sweeps never write score history, trigger
+  adaptation or promote centroids. The original job result is left untouched.
+- **Replay results are first-class**: each run gets its own result JSON, text
+  exports and an `eval.html?id=…&run=…` deep link.
+
+### Fixed
+
+- `sdts serve --registry PATH` only affected the registry-management page;
+  transcription still used the config default. The job config now receives the
+  server's registry path, so the gallery you manage is the gallery being
+  matched.
+- `identify_speakers` can now reuse precomputed speaker vectors and skip all
+  registry writes (`readonly=True`), which is what makes sweeps side-effect free.
 
 ---
 

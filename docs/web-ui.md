@@ -3,9 +3,10 @@
 A thin browser interface around the existing pipeline. It does **not** replace
 the CLI: `python -m sdts file.mp4` remains the one-shot path, and `labels`,
 `registry`, `enroll` and `calibrate` remain the scriptable path. The workbench
-adds three things the CLI cannot give you — a live progress view for a long
-job, a click-through transcript with per-speaker names, and a voice-gallery
-manager.
+adds five things the CLI cannot give you — a live progress view for a long
+job, a click-through transcript with per-speaker names, a voice-gallery
+manager, threshold sweeps that reuse the expensive stages, and DER/WER
+evaluation against a corrected reference.
 
 The UI has three complete translations, **中文 / English / 日本語**. Pick one
 in the language switcher at the top of every page; the choice is remembered in
@@ -77,6 +78,31 @@ delete (requires `?confirm=true`) are explicit actions. Enrolment takes a path
 to a one-speaker sample. The browser never receives an embedding vector — the
 API returns names, counts and timestamps only.
 
+**Parameter sweep (`sweep.html?id=…`).** Linked from a finished job. Each row
+is one configuration (accept / reject / margin / mode); the page submits up to
+24 at once. `POST /api/jobs/{id}/replay` loads the job's saved artifacts and
+re-runs only `fuse` → `identify` → export — no ffmpeg, no ASR, no pyannote
+diarization. Replays are strictly read-only: no score history, no adaptation,
+no centroid promotion. Each run gets its own result JSON and exports.
+
+**Evaluation (`eval.html`).** Upload a gold JSON and choose either the original
+job result or one of its replay runs. The report shows DER with its miss /
+false-alarm / confusion components from `pyannote.metrics`, plus WER from a
+built-in Levenshtein implementation (character-level for ja/zh, i.e. CER). A
+gold template is downloadable from the page.
+
+Gold format — same shape as a result JSON, only `utterances` is read:
+
+```json
+{
+  "language": "ja",
+  "utterances": [
+    {"speaker": "SPEAKER_00", "start": 0.0, "end": 2.5, "text": "正しい文字起こし"},
+    {"speaker": "SPEAKER_01", "start": 2.5, "end": 4.0, "text": "次の発話"}
+  ]
+}
+```
+
 **Settings (`settings.html`).** Shows the thresholds from the base config and
 writes an edited YAML through `PipelineConfig.from_dict`, which rejects unknown
 keys before anything is written. `hf_token` is never echoed to the browser.
@@ -108,16 +134,15 @@ which is re-raised so the worker can stop the job deliberately.
 
 Two details are worth knowing before extending this layer:
 
-- **Stage replay is available but not wired to a UI yet.** The pure interfaces
-  `Diarizer.diarize_array`, `fuse(segments, turns, cfg)` and
-  `SpeakerEmbedder.embed_turns` mean a future "re-run with different thresholds"
-  button can recompute the fusion/identification tail without repeating ASR.
-  The current workbench submits a whole new job instead. Doing it properly is a
-  second step, not a hidden feature of this one.
-- **DER/WER evaluation is not in this PR.** `pyannote.metrics` is available in
-  the environment but `jiwer` is not, and there is no gold-standard loader
-  yet. The data model and the job results are the groundwork for an `eval`
-  page, not the page itself.
+- **Artifacts are a cache, not an interchange format.** `sdts/artifacts.py`
+  writes `manifest.json`, `segments.json`, `turns.json` and
+  `speaker_vectors.json` under `<data-dir>/artifacts/<job-id>/`. `SCHEMA_VERSION`
+  is checked on read; an unknown version is refused instead of guessed at.
+  Jobs created before artifacts existed cannot be replayed — submit a new job.
+- **Replay is intentionally narrow.** It can change merge and identification
+  settings and re-render outputs. It cannot change ASR, diarization or the
+  cross-chunk speaker clustering that produced the turns; those still need a
+  full run. This is the boundary of what the saved artifacts make possible.
 
 ---
 
@@ -136,6 +161,12 @@ Two details are worth knowing before extending this layer:
 | GET | `/api/jobs/{id}/export?fmt=json\|txt\|srt\|md` | download |
 | GET | `/api/jobs/{id}/audio` | original file with range support |
 | GET | `/api/jobs/{id}/clip?start=&seconds=` | decoded WAV slice |
+| POST | `/api/jobs/{id}/replay` | run one or many config variants from artifacts |
+| GET | `/api/jobs/{id}/replays` | list replay runs |
+| GET | `/api/jobs/{id}/replays/{run}/result` | a replay's result JSON |
+| GET | `/api/jobs/{id}/replays/{run}/export?fmt=` | a replay's text exports |
+| POST | `/api/eval` | DER/WER against a gold JSON |
+| GET | `/api/eval/gold-template` | minimal gold file |
 | GET, POST | `/api/registry` | list / enrol |
 | POST | `/api/registry/{id}/rename`, `/revoke` | maintain a gallery entry |
 | DELETE | `/api/registry/{id}?confirm=true` | hard delete |
@@ -171,7 +202,7 @@ Interactive docs are at `/api/docs`.
 ## 6. Tests
 
 ```bash
-python -m pytest -q        # 80 tests, no GPU, no model downloads
+python -m pytest -q        # 83 tests, no GPU, no model downloads
 ```
 
 `tests/test_server.py` drives the app in-process with `httpx.ASGITransport`

@@ -25,11 +25,12 @@ import httpx
 import numpy as np
 import pytest
 
+from sdts.artifacts import save_artifacts
 from sdts.config import PipelineConfig
 from sdts.server.app import create_app
 from sdts.server.events import EventBus
 from sdts.server.jobs import JobManager, apply_overrides
-from sdts.types import TranscriptResult, Turn, Utterance
+from sdts.types import Segment, TranscriptResult, Turn, Utterance
 
 WEB = Path(__file__).resolve().parents[1] / "sdts" / "web"
 
@@ -45,7 +46,7 @@ class FakePipeline:
         self.cfg = cfg
         FakePipeline.last_config = cfg
 
-    def run(self, path, num_speakers=None, *, on_stage=None):
+    def run(self, path, num_speakers=None, *, on_stage=None, artifacts_dir=None):
         stages = [("probe", 0, 1), ("chunk", 0, 2), ("chunk", 1, 2),
                   ("chunk", 2, 2), ("reconcile", 0, 1), ("fuse", 0, 1), ("done", 1, 1)]
         for stage, done, total in stages:
@@ -55,7 +56,7 @@ class FakePipeline:
                 time.sleep(FakePipeline.hold)
         if FakePipeline.fail_with:
             raise RuntimeError(FakePipeline.fail_with)
-        return TranscriptResult(
+        result = TranscriptResult(
             utterances=[
                 Utterance(speaker="SPEAKER_00", start=0.0, end=2.0, text="hello there"),
                 Utterance(speaker="SPEAKER_01", start=2.0, end=4.0, text="general kenobi"),
@@ -67,6 +68,18 @@ class FakePipeline:
                   "elapsed_seconds": 0.1, "rtf": 0.02, "sample_rate": 16000,
                   "codec": "pcm_s16le", "channels": 1},
         )
+        if artifacts_dir is not None:
+            save_artifacts(
+                artifacts_dir,
+                segments=[Segment(0.0, 2.0, "hello there"),
+                          Segment(2.0, 4.0, "general kenobi"),
+                          Segment(4.0, 5.0, "you are a bold one")],
+                turns=[Turn(0.0, 2.0, "SPEAKER_00"), Turn(2.0, 4.0, "SPEAKER_01"),
+                       Turn(4.0, 5.0, "SPEAKER_00")],
+                speaker_vectors={"SPEAKER_00": [1.0] + [0.0] * 255,
+                                 "SPEAKER_01": [0.0, 1.0] + [0.0] * 254},
+                result=result, chunks=[(0.0, 3.0), (2.0, 5.0)], stride=1.0)
+        return result
 
 
 @pytest.fixture()
@@ -115,7 +128,8 @@ async def test_health_and_static_pages(client):
     index = await client.get("/")
     assert index.status_code == 200
     assert "index.title" in index.text or "index.title" in index.text
-    assert (await client.get("/job.html")).status_code == 200
+    for page in ("job.html", "registry.html", "settings.html", "sweep.html", "eval.html"):
+        assert (await client.get(f"/{page}")).status_code == 200, page
     assert (await client.get("/i18n.js")).status_code == 200
     assert (await client.get("/style.css")).status_code == 200
 
@@ -502,6 +516,81 @@ async def test_delete_job_keeps_the_audio_by_default(client, sample):
     assert (await client.delete(f"/api/jobs/{job['id']}")).status_code == 200
     assert sample.is_file()                          # source untouched
     assert (await client.get(f"/api/jobs/{job['id']}")).status_code == 404
+
+
+# -- replay and evaluation ------------------------------------------------
+
+async def test_replay_sweeps_thresholds_without_touching_the_original(client, sample, app):
+    from sdts.registry import SpeakerRegistry
+
+    # `identify_speakers` reads the config registry path, i.e. the app's
+    # setting - not tmp_path. Use the same database the request will use.
+    reg_path = app.state.settings.registry_path
+    reg = SpeakerRegistry(reg_path)
+    try:
+        reg.add_speaker("Taro", np.array([1.0] + [0.0] * 255, dtype=np.float32),
+                        consent_scope="persistent")
+    finally:
+        reg.close()
+
+    job = (await client.post("/api/jobs", json={
+        "source": str(sample),
+        "config": {"identification": {"enabled": True, "mode": "auto"}},
+    })).json()["job"]
+    final = await wait_done(client, job["id"])
+    assert final["status"] == "done"
+    original = (await client.get(f"/api/jobs/{job['id']}/result")).json()
+    assert "identification" not in original["meta"]   # FakePipeline never identified
+
+    resp = await client.post(f"/api/jobs/{job['id']}/replay", json={"runs": [
+        {"name": "loose", "config": {"identification": {
+            "enabled": True, "mode": "auto", "accept_threshold": 0.5}}},
+        {"name": "strict", "config": {"identification": {
+            "enabled": True, "mode": "auto", "accept_threshold": 1.01,
+            "reject_threshold": 1.01}}},
+    ]})
+    assert resp.status_code == 200, resp.text
+    runs = resp.json()["runs"]
+    assert [r["name"] for r in runs] == ["loose", "strict"]
+    loose = {d["speaker"]: d for d in runs[0]["decisions"]}
+    strict = {d["speaker"]: d for d in runs[1]["decisions"]}
+    assert loose["SPEAKER_00"]["decision"] == "accept"
+    assert loose["SPEAKER_00"]["best"] == "Taro"
+    assert strict["SPEAKER_00"]["decision"] == "unknown"
+
+    listed = (await client.get(f"/api/jobs/{job['id']}/replays")).json()
+    assert len(listed["runs"]) == 2
+    replayed = (await client.get(
+        f"/api/jobs/{job['id']}/replays/{runs[0]['id']}/result")).json()
+    assert any(u["speaker_display"] == "Taro" for u in replayed["utterances"])
+
+    # Replays are read-only: no score history / adaptation writes.
+    reg = SpeakerRegistry(reg_path)
+    try:
+        assert reg.conn.execute("SELECT COUNT(*) FROM score_history").fetchone()[0] == 0
+    finally:
+        reg.close()
+    # Original job result is byte-for-byte unchanged.
+    assert (await client.get(f"/api/jobs/{job['id']}/result")).json() == original
+
+
+async def test_eval_reports_perfect_score_on_identical_transcript(client, sample):
+    job = await _finished_job(client, sample)
+    reference = (await client.get(f"/api/jobs/{job['id']}/result")).json()
+    resp = await client.post("/api/eval", json={
+        "job_id": job["id"], "gold": reference, "language": "en"})
+    assert resp.status_code == 200, resp.text
+    report = resp.json()
+    assert report["der"] == 0.0
+    assert report["wer"] == 0.0
+    assert report["wer_components"]["unit"] == "word"
+
+
+def test_wer_uses_characters_for_japanese():
+    from sdts.evaluate import word_error_rate
+
+    assert word_error_rate("こんにちは", "こんにちは", character=True)["wer"] == 0.0
+    assert word_error_rate("こんにちは", "こんにちは世界", character=True)["wer"] > 0
 
 
 # -- CLI entry ------------------------------------------------------------

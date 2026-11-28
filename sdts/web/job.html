@@ -12,6 +12,7 @@
   <nav class="main">
     <a href="index.html" data-i18n="nav.new"></a>
     <a href="registry.html" data-i18n="nav.registry"></a>
+    <a href="eval.html" data-i18n="nav.eval"></a>
     <a href="settings.html" data-i18n="nav.settings"></a>
     <a href="/api/docs" target="_blank" rel="noopener" data-i18n="nav.docs"></a>
   </nav>
@@ -29,6 +30,7 @@
     </div>
     <div class="row">
       <button id="cancel" hidden data-i18n="job.cancel"></button>
+      <a id="sweep-link" class="chip" hidden data-i18n="job.sweep"></a>
       <div class="row" id="exports" hidden></div>
     </div>
   </div>
@@ -122,6 +124,9 @@ function renderProgress(job) {
   const finished = ["done", "failed", "cancelled"].includes(job.status);
   document.getElementById("cancel").hidden = finished;
   document.getElementById("exports").hidden = job.status !== "done";
+  const sweep = document.getElementById("sweep-link");
+  sweep.hidden = job.status !== "done";
+  if (job.status === "done") sweep.href = `sweep.html?id=${encodeURIComponent(job.id)}`;
   if (finished && job.status === "done") document.getElementById("progress-card").hidden = true;
   if (finished && state.es) { state.es.close(); state.es = null; }
 

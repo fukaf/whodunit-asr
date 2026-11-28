@@ -38,8 +38,17 @@ def _turn_vector(turn: Turn, embedder, chunk_audio, chunks, stride) -> np.ndarra
 
 def identify_speakers(result: TranscriptResult, *, turns: list[Turn], embedder,
                       cfg: IdentificationConfig, chunk_audio, chunks,
-                      stride: float) -> dict[str, Any]:
-    """Apply registry matches to utterances and return a meta summary."""
+                      stride: float,
+                      speaker_vectors: dict[str, Any] | None = None,
+                      collector: dict[str, Any] | None = None,
+                      readonly: bool = False) -> dict[str, Any]:
+    """Apply registry matches to utterances and return a meta summary.
+
+    `speaker_vectors` lets a replay reuse the vectors computed by the original
+    run. `collector` records freshly computed vectors for the artifact writer.
+    `readonly` suppresses registry writes, so threshold sweeps cannot pollute
+    score history or trigger adaptation.
+    """
     meta: dict[str, Any] = {
         "mode": cfg.mode,
         "registry": str(Path(cfg.registry_path).expanduser()),
@@ -77,7 +86,15 @@ def identify_speakers(result: TranscriptResult, *, turns: list[Turn], embedder,
 
         for speaker in result.speakers:
             speaker_turns = [t for t in turns if t.speaker == speaker]
-            vec = embedder.embed_turns(speaker_turns, chunk_audio, chunks, stride)
+            if speaker_vectors is not None and speaker in speaker_vectors:
+                raw_vec = np.asarray(speaker_vectors[speaker], dtype=np.float32)
+                norm = float(np.linalg.norm(raw_vec))
+                vec = raw_vec / norm if norm else None
+            else:
+                vec = embedder.embed_turns(speaker_turns, chunk_audio, chunks, stride)
+            if collector is not None:
+                collector.setdefault("speaker_vectors", {})[speaker] = (
+                    [float(x) for x in vec] if vec is not None else None)
             if vec is None:
                 log.warning("no embedding for %s; leaving unlabelled", speaker)
                 meta["matches"].append({"speaker": speaker, "decision": "no_embedding"})
@@ -118,7 +135,7 @@ def identify_speakers(result: TranscriptResult, *, turns: list[Turn], embedder,
             mapping[speaker] = display if cfg.mode == "auto" else None
 
             adapt = cfg.adaptation
-            if (decision == "accept" and adapt.enabled
+            if (not readonly and decision == "accept" and adapt.enabled
                     and best_score >= cfg.accept_threshold + adapt.update_margin
                     and margin_ok and cfg.mode == "auto"):
                 pending = []
@@ -137,7 +154,7 @@ def identify_speakers(result: TranscriptResult, *, turns: list[Turn], embedder,
                     for old in active[:max(0, len(active) - cfg.max_centroids)]:
                         registry.delete_centroid(old["id"])
 
-            if decision == "accept":
+            if not readonly and decision == "accept":
                 registry.add_score(best["id"], best_score)
                 if (best["id"] not in drift_checked
                         and registry.drift_flag(best["id"], adapt.drift_window,

@@ -83,12 +83,16 @@ def create_app(*, data_dir: str | Path = "~/.sdts/workbench",
         return await call_next(request)
 
     from .routes import jobs as job_routes
+    from .routes import evaluation as eval_routes
     from .routes import registry as registry_routes
     from .routes import results as result_routes
     from .routes import settings_api as config_routes
+    from .routes import sweep as sweep_routes
 
     app.include_router(job_routes.router, prefix="/api/jobs", tags=["jobs"])
     app.include_router(result_routes.router, prefix="/api/jobs", tags=["results"])
+    app.include_router(sweep_routes.router, prefix="/api/jobs", tags=["sweeps"])
+    app.include_router(eval_routes.router, prefix="/api/eval", tags=["evaluation"])
     app.include_router(registry_routes.router, prefix="/api/registry", tags=["registry"])
     app.include_router(config_routes.router, prefix="/api/config", tags=["config"])
 
