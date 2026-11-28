@@ -46,8 +46,12 @@ are the knobs that change transcription quality most often. Advanced or
 site-specific settings stay in the YAML file. The recent-job table polls every
 4 s; one job runs at a time and the rest wait in the queue.
 
-**Job (`job.html?id=…`).** Opens an `EventSource` to
-`GET /api/jobs/{id}/events`. Progress events carry `stage`, `done`, `total`
+**Job (`job.html?id=…`).** Safe to open at any time, including immediately
+after `POST /api/jobs` while the job is still `queued` — `/summary` returns the
+live job state for every state and fills in the result fields once they exist.
+The page opens an `EventSource` to `GET /api/jobs/{id}/events`, with a 3 s poll
+of `/api/jobs/{id}` as a fallback if the stream is interrupted. Progress events
+carry `stage`, `done`, `total`
 and a coarse `progress` fraction; chunk numbering comes from the new
 `Pipeline.run(on_stage=…)` hook. When the job finishes the page loads the
 result JSON, lists one card per raw `SPEAKER_0i` cluster (with the
@@ -159,7 +163,7 @@ Interactive docs are at `/api/docs`.
 ## 6. Tests
 
 ```bash
-python -m pytest -q        # 77 tests, no GPU, no model downloads
+python -m pytest -q        # 78 tests, no GPU, no model downloads
 ```
 
 `tests/test_server.py` drives the app in-process with `httpx.ASGITransport`

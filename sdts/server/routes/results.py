@@ -61,17 +61,27 @@ def _rewrite_text_formats(job, data: dict[str, Any]) -> list[str]:
 
 @router.get("/{job_id}/summary")
 def summary(request: Request, job_id: str):
-    """Speaker list plus the metadata the job page renders in its header."""
+    """Header facts and speaker cards, for **every** job state.
+
+    The job page opens immediately after `POST /api/jobs`, while the job is
+    still queued. Returning 409 here used to leave the page stuck at `...`:
+    it never learned the job id was valid and never subscribed to SSE. Results
+    are filled in once the job is done; until then the payload still carries
+    the live job state, which is exactly what the progress bar needs.
+    """
     job = get_job(request, job_id)
-    data = job_result(job)
+    ready = (job.status == "done" and bool(job.result_path)
+             and Path(job.result_path).is_file())
+    data = job_result(job) if ready else {}
     return {
         "job": job.public(),
+        "result_ready": ready,
         "language": data.get("language"),
         "duration": data.get("duration"),
-        "speakers": _speakers_payload(data),
-        "speaker_stats": data.get("speaker_stats") or {},
-        "meta": data.get("meta", {}),
-        "utterances": len(data.get("utterances", [])),
+        "speakers": _speakers_payload(data) if ready else [],
+        "speaker_stats": (data.get("speaker_stats") or {}) if ready else {},
+        "meta": (data.get("meta") or {}) if ready else dict(job.meta or {}),
+        "utterances": len(data.get("utterances", [])) if ready else 0,
     }
 
 

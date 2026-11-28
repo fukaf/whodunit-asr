@@ -58,6 +58,15 @@ Change types: **Added** · **Changed** · **Fixed** · **Removed** · **Deprecat
 - `sdts dev` now includes `pytest-asyncio`; the ASGI tests run in-process with
   `httpx.ASGITransport` and need no port, GPU or model download.
 
+### Fixed
+
+- Opening a job page while the job was still queued or running returned `409`
+  from `/api/jobs/{id}/summary`, so the page never subscribed to SSE and stayed
+  at `...` until a manual reload. `/summary` now answers for every job state
+  (with empty result fields until the job is done), the page polls `/api/jobs`
+  every 3 s as a fallback if the event stream is interrupted, and a finished
+  job is loaded even if the page missed the `result` event.
+
 ### Security
 
 - The workbench binds to `127.0.0.1` by default and **refuses a non-loopback

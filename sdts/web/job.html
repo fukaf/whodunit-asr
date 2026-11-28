@@ -85,6 +85,7 @@ const state = {
   filter: null,          // speaker id or null
   search: "",
   es: null,
+  poll: null,
 };
 
 if (!jobId) {
@@ -268,17 +269,41 @@ async function loadSummary() {
     const data = await api(`/api/jobs/${jobId}/summary`);
     state.summary = data;
     renderProgress(data.job);
-    if (data.job.status === "done") {
-      renderSpeakers();
-      renderExports();
-      await loadTranscript();
-    } else if (!state.es) {
-      watch();
+    const finished = ["done", "failed", "cancelled"].includes(data.job.status);
+    if (finished) {
+      stopPolling();
+      if (data.result_ready) {
+        renderSpeakers();
+        renderExports();
+        await loadTranscript();
+      }
+    } else {
+      // The job may have been queued before this page opened. SSE gives us
+      // smooth updates, and a slow poll is the safety net if the stream is
+      // interrupted (or the server is restarted mid-job).
+      if (!state.es) watch();
+      startPolling();
     }
   } catch (err) {
     if (err.status === 404) { location.replace("index.html"); return; }
     banner(flash, errorText(err, t));
   }
+}
+
+function startPolling() {
+  if (state.poll) return;
+  state.poll = setInterval(async () => {
+    try {
+      const { job } = await api(`/api/jobs/${jobId}`);
+      if (state.summary) state.summary.job = job;
+      renderProgress(job);
+      if (["done", "failed", "cancelled"].includes(job.status)) loadSummary();
+    } catch { /* EventSource or the next poll will catch up */ }
+  }, 3000);
+}
+
+function stopPolling() {
+  if (state.poll) { clearInterval(state.poll); state.poll = null; }
 }
 
 async function loadTranscript() {
@@ -330,7 +355,10 @@ function watch() {
     } catch { /* keepalive frame */ }
     loadSummary();
   });
-  es.onerror = () => { /* transparent reconnect; nothing to say to the user */ };
+  es.onerror = () => {
+    // EventSource reconnects by itself. If it cannot (server was stopped),
+    // `state.es` stays set, so the polling fallback keeps the page honest.
+  };
 }
 
 document.addEventListener("sdts:langchange", () => {

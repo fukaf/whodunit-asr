@@ -178,6 +178,25 @@ async def test_job_from_local_path_runs_to_completion(client, sample):
     assert (out / f"{final['stem']}.txt").is_file()
 
 
+async def test_summary_is_available_while_job_is_running(client, sample):
+    """Regression: the job page opened right after upload used to receive 409
+    from /summary, never start SSE, and sit at `...` for the entire run."""
+    FakePipeline.hold = 0.05
+    job = (await client.post("/api/jobs", json={"source": str(sample)})).json()["job"]
+    resp = await client.get(f"/api/jobs/{job['id']}/summary")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["job"]["id"] == job["id"]
+    assert body["job"]["status"] in ("queued", "running")
+    assert body["result_ready"] is False
+    assert body["speakers"] == [] and body["utterances"] == 0
+    final = await wait_done(client, job["id"])
+    assert final["status"] == "done"
+    ready = (await client.get(f"/api/jobs/{job['id']}/summary")).json()
+    assert ready["result_ready"] is True
+    assert len(ready["speakers"]) == 2
+
+
 async def test_upload_round_trip(client, sample):
     with sample.open("rb") as fh:
         created = await client.post(
