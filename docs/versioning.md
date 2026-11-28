@@ -241,7 +241,11 @@ URL until it too becomes a comparison.
 
 - [ ] `[Unreleased]` renamed to `[X.Y.Z] - YYYY-MM-DD`, a fresh empty
       `[Unreleased]` left above it.
-- [ ] `sdts/__init__.py` and `pyproject.toml` agree, and match the heading.
-- [ ] `pytest -q` green on the release commit.
+- [ ] `sdts/__init__.py` bumped; `pyproject.toml` needs no edit (it reads the
+      attribute) but the installed metadata should be eyeballed once.
+- [ ] `pytest -q` green on the release commit — `tests/test_version.py` fails
+      if the heading is missing.
 - [ ] Compare links at the bottom updated.
 - [ ] `git tag -a vX.Y.Z` pushed, plus an archive of the tree.
+- [ ] The tag points at the commit whose tree the section describes. If it does
+      not, do not tag — see §3, "What 0.1.0, 0.1.1 and 0.2.0 did *not* do".
