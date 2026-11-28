@@ -11,6 +11,13 @@ from pathlib import Path
 from typing import Any
 
 
+def _check_choice(key: str, value: str, allowed: tuple[str, ...]) -> None:
+    """Fail loudly on a typo like `mode: Review` instead of silently
+    degrading to "no identification happened"."""
+    if value not in allowed:
+        raise ValueError(f"{key} must be one of {list(allowed)}, got {value!r}")
+
+
 @dataclass
 class AudioConfig:
     sample_rate: int = 16000
@@ -116,6 +123,9 @@ class AdaptationConfig:
     drift_window: int = 5
     drift_threshold: float = 0.60
 
+    def __post_init__(self) -> None:
+        _check_choice("identification.adaptation.mode", self.mode, ("review", "auto"))
+
 
 @dataclass
 class IdentificationConfig:
@@ -130,6 +140,9 @@ class IdentificationConfig:
     margin: float = 0.10                # only when >=2 registered candidates
     max_centroids: int = 6
     adaptation: AdaptationConfig = field(default_factory=AdaptationConfig)
+
+    def __post_init__(self) -> None:
+        _check_choice("identification.mode", self.mode, ("off", "review", "auto"))
 
 
 @dataclass

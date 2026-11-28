@@ -73,6 +73,7 @@ def identify_speakers(result: TranscriptResult, *, turns: list[Turn], embedder,
         }
         source_file = result.meta.get("source")
         mapping: dict[str, str | None] = {}
+        drift_checked: set[str] = set()
 
         for speaker in result.speakers:
             speaker_turns = [t for t in turns if t.speaker == speaker]
@@ -138,10 +139,15 @@ def identify_speakers(result: TranscriptResult, *, turns: list[Turn], embedder,
 
             if decision == "accept":
                 registry.add_score(best["id"], best_score)
-                if registry.drift_flag(best["id"], adapt.drift_window, adapt.drift_threshold):
+                if (best["id"] not in drift_checked
+                        and registry.drift_flag(best["id"], adapt.drift_window,
+                                                adapt.drift_threshold)):
                     record["drift"] = "needs_re_enrollment"
                     log.warning("speaker %s scores are drifting; re-enrollment advised",
                                 best["display_name"])
+                # One vote per recording: several clusters of the same person
+                # must not fill the window and fake a drift on their own.
+                drift_checked.add(best["id"])
 
             meta["matches"].append(record)
 

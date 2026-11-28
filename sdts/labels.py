@@ -205,11 +205,11 @@ def _render_html(labels: dict[str, Any]) -> str:
         seconds = spk.get("clip_seconds", 0.0)
         warn = ""
         if seconds < 10:
-            warn = (f'<p class="warn">仅 {seconds:.0f} 秒可用样本，声纹会偏弱；'
+            warn = (f'<p class="warn">仅 {seconds} 秒可用样本，声纹会偏弱；'
                     f'建议只做会话内别名，不要保存到声纹库。</p>')
         sections.append(f"""
 <section class="speaker">
-  <h2>{spk['id']} <span class="meta">{seconds:.0f}s / {len(spk['clips'])} 段</span></h2>
+  <h2>{spk['id']} <span class="meta">{seconds} 秒 / {len(spk['clips'])} 段</span></h2>
   {warn}
   <ul>{hints}</ul>
   <div class="clips">{clips}</div>
@@ -276,6 +276,16 @@ def apply_labels(result_path: str | Path, labels_path: str | Path, *,
     out_cfg = OutputConfig(out_dir=str(out_dir),
                            formats=("json", "txt", "srt", "md"))
     written = write_all(result, out_cfg, result_path.stem)
+    # write_all() serialises Utterance.to_dict(), where speaker_display falls
+    # back to the raw label. Drop that placeholder so the JSON matches what
+    # was written here (and what `labels init` starts from next time).
+    json_path = out_dir / f"{result_path.stem}.json"
+    if json_path.is_file():
+        dumped = load_result(json_path)
+        for raw, utt in zip(dumped.get("utterances", []), result.utterances):
+            raw["speaker_display"] = utt.speaker_display
+        json_path.write_text(json.dumps(dumped, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
 
     persisted: dict[str, str] = {}
     registry = None
@@ -315,6 +325,14 @@ def apply_labels(result_path: str | Path, labels_path: str | Path, *,
     if persisted:
         labels_path.write_text(json.dumps(labels, ensure_ascii=False, indent=2),
                                encoding="utf-8")
+    # Offer the same review page for the labelled result: picking another
+    # speaker only to re-type the names you just entered is busywork.
+    # Best-effort, because the source audio may have been moved since.
+    try:
+        init_labels(result_path, registry_path=registry_path)
+    except (OSError, KeyError, ValueError) as exc:
+        print(f"note: could not regenerate the review page ({exc})")
+
     return {"persisted": persisted, "written": [str(p) for p in written]}
 
 

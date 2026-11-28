@@ -223,3 +223,40 @@ def test_clip_windows_falls_back_when_all_short():
 
     utts = [{"start": 0.0, "end": 0.9, "text": "はい"}, {"start": 2.0, "end": 2.8, "text": "どうぞ"}]
     assert len(_clip_windows(utts, clip_count=2, clip_seconds=8.0)) == 2
+
+
+def test_apply_labels_keeps_result_json_clean(tmp_path):
+    """A speaker left unnamed must stay null in JSON, not echo the raw label."""
+    from sdts import audio as audio_mod
+
+    source = tmp_path / "source.wav"
+    audio_mod.write_wav(np.zeros(32000, dtype=np.float32), source)
+    result_path = tmp_path / "meeting.json"
+    result_path.write_text(json.dumps({
+        "language": "ja", "duration": 4.0, "speakers": ["SPEAKER_00", "SPEAKER_01"],
+        "utterances": [
+            {"speaker": "SPEAKER_00", "start": 0.0, "end": 1.5, "text": "はい", "words": []},
+            {"speaker": "SPEAKER_01", "start": 1.6, "end": 3.5, "text": "どうぞ", "words": []},
+        ],
+        "meta": {"source": str(source)},
+    }, ensure_ascii=False), encoding="utf-8")
+
+    paths = init_labels(result_path, clip_count=1)
+    labels = load_result(paths["labels"])
+    labels["speakers"][0]["display_name"] = "张三"
+    paths["labels"].write_text(json.dumps(labels, ensure_ascii=False), encoding="utf-8")
+
+    apply_labels(result_path, paths["labels"], embedder=MockEmbedder())
+    raw = load_result(result_path)["utterances"]
+    assert raw[0]["speaker_display"] == "张三"
+    assert raw[1]["speaker_display"] is None
+
+
+def test_identification_mode_typo_is_rejected():
+    """`mode: Review` must not degrade silently into "nothing identified"."""
+    import pytest
+
+    from sdts.config import PipelineConfig
+
+    with pytest.raises(ValueError, match="identification.mode"):
+        PipelineConfig.from_dict({"identification": {"enabled": True, "mode": "Review"}})
